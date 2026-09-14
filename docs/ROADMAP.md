@@ -51,29 +51,35 @@ Runtime data (IPinfo MMDB, local volumes) goes in `data/` and is gitignored.
 
 ---
 
-## Phase 0: Foundation ⬜
+## Phase 0: Foundation ✅
 
 **Goal:** a clean repo and a working container toolchain.
 
-1. `git init`, `.gitignore`, `.editorconfig`, `.env.example`, `README.md`, license.
-2. **Dev host = Docker Engine inside the Ubuntu 22.04 arm64 VM** (VMware Fusion,
-   images in `~/VMs/CA-DNS`):
-   - Extend `cloud-init/user-data` to install Docker Engine + compose plugin from
-     Docker's apt repo and add `ubuntu` to the `docker` group. Replace the
-     plaintext password with an SSH key.
-   - Free port 53: set `DNSStubListener=no` in `/etc/systemd/resolved.conf`
-     (systemd-resolved otherwise holds `127.0.0.53:53`).
-   - Drive it from the Mac: `docker context create cadns-vm --docker host=ssh://ubuntu@<vm-ip>`.
-     Builds and runs happen in the VM, and you edit on the Mac. Images `COPY` source,
-     with no source bind mounts, so this works across machines.
-   - `scripts/dev/` documents and automates the above.
-3. `compose.yaml` with only `postgres` (+ named volume, healthcheck).
-4. `Makefile` targets: `up`, `down`, `logs`, `psql`.
-5. Tooling: `uv` for Python, `ruff` + `pytest`, `clang-format` for C,
-   `pre-commit` hooks.
+1. ✅ git repo, `.gitignore`, `.gitattributes`, `.editorconfig`, `.env.example`, `README.md`.
+   License still to be decided.
+2. **Dev host = Docker Engine inside the Ubuntu 22.04 arm64 VM** (VMware Fusion):
+   - ✅ `scripts/dev/Brewfile` (`make bootstrap-mac`): the Mac gets only the docker CLI
+     plus tooling, not Docker Desktop.
+   - ✅ `scripts/dev/bootstrap-vm.sh` (`make vm-bootstrap`): installs Docker Engine
+     and the compose plugin, adds the user to the `docker` group, sets up log rotation,
+     and frees port 53 by disabling the systemd-resolved stub listener. It pins
+     host DNS to public resolvers, because VMware Fusion's NAT DNS proxy
+     garbles EDNS replies and breaks image pulls.
+   - ✅ `make vm-copy-key`: key-based SSH, which the docker context needs.
+   - ✅ `make context`: `docker context create cadns-vm --docker host=ssh://…`.
+     Builds and runs happen in the VM; you edit on the Mac.
+     **Rule:** no bind mounts from the repo, because paths would resolve on the VM.
+     Config is baked into images; data lives in named volumes.
+3. ✅ `compose.yaml` with only `postgres` (PostgreSQL 18, named volume, healthcheck,
+   internal `backend` network).
+4. ✅ `Makefile`: `env`, `up`, `down`, `ps`, `logs`, `psql`, `nuke`, `lint`, `help`.
+5. ✅ `.pre-commit-config.yaml`: whitespace/YAML/private-key checks, shellcheck,
+   ruff, clang-format. `uv` + `pytest` arrive with the first Python code (Phase 1).
 
 **Exit:** from the Mac, `docker --context cadns-vm compose version` works and
 `make up && make psql` gives a PostgreSQL prompt running in the VM.
+✅ Verified 2026-09-14: PostgreSQL 18.6 healthy on the VM (linux/arm64); the `backend`
+network has no Internet access; pre-commit hooks pass.
 
 ---
 

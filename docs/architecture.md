@@ -12,6 +12,8 @@ uses BIND 9 + PostgreSQL DLZ to answer with the lowest-RTT address.
 
 ## 1. Request flow
 
+![CA-DNS architecture](images/architecture.png)
+
 ```mermaid
 flowchart LR
     C[Client] -- "1 query" --> B[BIND 9<br/>resolver]
@@ -48,7 +50,7 @@ worker has measured it) receive the carbon-aware answer.
 | Component | Tech | Responsibility |
 |-----------|------|----------------|
 | **resolver** | BIND 9.20 (ESV) + custom `dlz_pgsql` dlopen module (C, libpq) | Serve hits from PostgreSQL, recurse on misses, emit dnstap |
-| **postgres** | PostgreSQL 17 | RRsets, endpoints, geolocation, carbon signals, measurement queue; answer policy lives in SQL functions |
+| **postgres** | PostgreSQL 18 | RRsets, endpoints, geolocation, carbon signals, measurement queue; answer policy lives in SQL functions |
 | **collector** ("Aggregate") | Python, dnstap reader | Turn resolver misses into queue entries; record query activity for hits |
 | **monitor** ("IP Monitor") | Python | Re-enqueue expired RRsets of active domains; refresh MOER per grid region; garbage-collect inactive domains |
 | **worker** ("Measurement Worker") | Python (asyncio) | Resolve via upstream pool, geolocate, attach MOER, upsert results |

@@ -1,0 +1,37 @@
+# CA-DNS service stack.
+#
+# Runs against a remote Docker engine (the Ubuntu VM) through a docker context,
+# so services must not bind-mount files from the repo: bind-mount paths would
+# resolve on the VM, not on the Mac. Configuration is baked into images or
+# passed through environment variables; data lives in named volumes.
+
+name: cadns
+
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-18}-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cadns}
+      POSTGRES_USER: ${POSTGRES_USER:-cadns_owner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (run `make env`)}
+    volumes:
+      # PostgreSQL 18+ images keep data under /var/lib/postgresql/<major>/
+      - pgdata:/var/lib/postgresql
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+networks:
+  # Services that only talk to each other (postgres). Services that need the
+  # Internet (resolver, worker) will also join a non-internal network.
+  backend:
+    internal: true
+
+volumes:
+  pgdata:
