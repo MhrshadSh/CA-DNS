@@ -1,0 +1,26 @@
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets & local config
+.env
+secrets/
+
+# Runtime data (IPinfo MMDB, volumes, logs)
+data/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+dist/
+*.egg-info/
+
+# C build output
+*.o
+*.so
