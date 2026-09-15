@@ -51,6 +51,29 @@ services:
       postgres:
         condition: service_healthy
 
+  # BIND 9.20 + dlz_pgsql: answers measured names from PostgreSQL, recurses
+  # for everything else (docs/architecture.md).
+  resolver:
+    build:
+      context: ./resolver
+    image: cadns-resolver:dev
+    restart: unless-stopped
+    environment:
+      # libpq settings for the DLZ module (least-privilege role).
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-cadns}
+      PGUSER: cadns_dlz
+      PGPASSWORD: ${CADNS_DLZ_PASSWORD}
+    ports:
+      - "${RESOLVER_LISTEN:-127.0.0.1}:53:53/udp"
+      - "${RESOLVER_LISTEN:-127.0.0.1}:53:53/tcp"
+    networks:
+      - backend
+      - frontend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   # Integration tests (make test). Runs as the owner inside rolled-back
   # transactions, so the dev database is left untouched.
   tests:
@@ -66,12 +89,16 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      resolver:
+        condition: service_healthy
 
 networks:
   # Services that only talk to each other (postgres). Services that need the
-  # Internet (resolver, worker) will also join a non-internal network.
+  # Internet (resolver, worker) also join frontend.
   backend:
     internal: true
+  # Internet access for recursion (resolver) and, later, upstream APIs (worker).
+  frontend:
 
 volumes:
   pgdata:

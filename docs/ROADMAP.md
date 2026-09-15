@@ -107,26 +107,35 @@ from empty, the query returns `192.0.2.10` (A) and `2001:db8::10` (AAAA), and 46
 
 ---
 
-## Phase 2: Resolver (BIND 9.20 + `dlz_pgsql`) ⬜
+## Phase 2: Resolver (BIND 9.20 + `dlz_pgsql`) ✅
 
 **Goal:** BIND serves hits from PostgreSQL and recurses on misses.
 
-1. **Spike (time-boxed):** minimal module that hardcodes one zone. Validate on
+1. ✅ **Spike (time-boxed):** minimal module that hardcodes one zone. Validate on
    BIND 9.20:
    hit → AA answer; miss → recursion; SOA/NS requirements; behaviour for other
    qtypes (HTTPS/TXT) and child names; dnstap availability in the ISC image.
-   Record the findings in `docs/architecture.md` §5.
-2. `dlz_pgsql.c`: `dlz_version`, `dlz_create` (parse conninfo & pool size),
-   `dlz_findzonedb`, `dlz_lookup`, `dlz_destroy`; prepared statements; thread-safe
-   connection pool; reconnect on failure; logging through BIND's `log` callback.
-3. `resolver/Dockerfile`: multi-stage build (compile against libpq, copy the `.so` into
-   `internetsystemsconsortium/bind9:9.20`).
-4. `named.conf`: recursion ACLs, `dlz "cadns"` block, dnstap to a unix socket,
-   query logging off by default.
-5. Integration tests: `dig` against the stack with seeded data.
+   Findings in `docs/architecture.md` §5.1. They changed the plan: ISC images are
+   amd64-only (→ Debian trixie `bind9`, ADR-1), and children of served names became
+   authoritative NXDOMAIN (→ exact-qname matching, ADR-8).
+2. ✅ `dlz_pgsql.c`: `dlz_version`, `dlz_create` (module options + libpq parameters,
+   credentials from `PG*` env), `dlz_findzonedb` (exact qname, one prepared
+   `cadns.dlz_lookup` round trip, rows cached per thread), `dlz_lookup`, `dlz_destroy`;
+   thread-safe connection pool; reconnect with backoff; fail-open on errors; logging
+   through BIND's `log` callback, once per state change. Unit tests run in the image build.
+3. ✅ `resolver/Dockerfile`: multi-stage build on pinned `debian:trixie` (compile against
+   `libpq-dev`, run unit tests, copy the `.so` next to the pinned `bind9` package).
+4. ✅ `named.conf`: recursion ACLs (loopback + private networks), `dlz "cadns"` block,
+   dnstap to `/run/cadns/dnstap.sock`, query logging off, no control channel.
+5. ✅ Integration tests (`tests/resolver/`, dnspython): green `aa` answers, recursion,
+   children/expired names, database changes, concurrency, fail-open.
 
 **Exit:** `dig @localhost www.example.test` returns the seeded greenest address with `aa`;
 `dig @localhost example.com` resolves recursively.
+✅ Verified 2026-09-15 on the dev stack and a fresh throwaway project: `192.0.2.10` with `aa`;
+`example.com` recursive with `ad`; 56 tests pass. Manual outage test: with PostgreSQL stopped
+the resolver answers by recursion (also after a restart), and serves green answers again
+once the database is back.
 
 ---
 

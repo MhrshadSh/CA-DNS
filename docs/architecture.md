@@ -68,23 +68,31 @@ ISC's maintained [dlz-modules](https://gitlab.isc.org/isc-projects/dlz-modules)
 repository has MySQL, SQLite3, LDAP, etc. — **but no PostgreSQL module**.
 
 Decision: write our own `dlz_pgsql.so` against the stable `dlz_minimal.h`
-API (DLZ_DLOPEN_VERSION 3). It only needs libpq, not BIND's headers, so we can
-run it on the official ISC BIND 9.20 image without compiling BIND.
+API (DLZ_DLOPEN_VERSION 3, vendored from dlz-modules commit `068c1e5`, ISC
+license). It only needs libpq, not BIND's headers.
+
+**Base image (spike finding):** the official `internetsystemsconsortium/bind9`
+images are published for amd64 only, and the dev host is arm64. We use Debian
+13 (trixie)'s `bind9` package, pinned (`1:9.20.26-1~deb13u1` at the time of the
+spike): multi-arch, built with `--enable-dnstap`, security-maintained by
+Debian, 172 MB. Alternatives considered: ISC's Ubuntu PPA (9.20.27, 239 MB,
+third-party repo) and building ISC's Alpine recipe from source (slow on the
+2-CPU dev VM). The module is compiled in a `debian:trixie` build stage so it
+links against the same libc and libpq as the runtime.
 
 Benefits over ActiveDNS's approach:
 - Parameterised queries (`PQexecPrepared`) instead of `'$zone$'` string
   substitution, which is SQL-injectable from the network.
 - Connection pool + `DNS_SDLZFLAG_THREADSAFE`, so lookups are not serialised.
-- The module calls two SQL functions (`cadns.dlz_findzone`, `cadns.dlz_lookup`);
-  the selection policy can change without recompiling C.
+- The selection policy lives in SQL (`cadns.dlz_lookup`), so it can change
+  without recompiling C.
 
 ### ADR-2: Detect misses with dnstap, not inside the DLZ lookup
 
 BIND probes the DLZ from the longest name down
-(`www.youtube.com` → `youtube.com` → `com`; see `dns_view_searchdlz` in
-`lib/dns/view.c`). If "enqueue on miss" ran inside `findzone`, every parent
-name would be enqueued too. The module also can't tell which probe is the
-client's actual qname.
+(`www.youtube.com` → `youtube.com` → `com`, never the root; see
+`dns_view_searchdlz` in `lib/dns/view.c`). If "enqueue on miss" ran inside
+`findzone`, every parent name would be enqueued too.
 
 Decision: keep the DLZ path read-only and fast. BIND streams dnstap
 `CLIENT_RESPONSE` messages to the collector. A NOERROR/NXDOMAIN A/AAAA response
@@ -92,6 +100,44 @@ Decision: keep the DLZ path read-only and fast. BIND streams dnstap
 collector enqueues the qname. A response **with** AA came from DLZ (a hit), so
 the collector updates `last_queried_at`. As a side effect, the query hot path
 never writes to the DB.
+
+Spike-verified: `CLIENT_RESPONSE` carries the header flags (hits `aa`, misses
+not). Authoritative NODATA for other qtypes on a served name (e.g. HTTPS) also
+has `aa`, so the collector must only consider A/AAAA. dnstap (fstrm) drops
+messages when its queue is full or the reader is gone, so the collector must
+tolerate loss: a lost miss is simply enqueued on the next one.
+
+### ADR-8: Serve exact query names only
+
+A DLZ "zone" found for a parent makes BIND authoritative for everything below
+it: with `youtube.com` served, `www.youtube.com` became an authoritative
+NXDOMAIN in the spike. Delegating child names back to the Internet does not
+work either: with fake NS it fails immediately, and even with the parent's real
+NS, negative answers (NXDOMAIN, NODATA) from below the fake zone cut are
+rejected (SERVFAIL).
+
+Decision: the module only lets `findzonedb` succeed for the client's qname.
+Within one query, BIND calls `findzonedb` synchronously on one thread,
+longest name first, so the module keeps the previous probe in a thread-local:
+a probe that is a proper parent of the previous one is a parent probe and gets
+`ISC_R_NOTFOUND` **without a database call**. The thread-local is cleared when
+a search ends (a zone is found, or an error). Children of served names then
+resolve normally, including negative answers.
+
+- Misclassification can only go one way: a query whose qname is a parent of the
+  previous search's last probe on that thread (e.g. after a search stopped at a
+  static zone) is treated as a parent probe and recurses. That is a missed
+  green answer, never a wrong one.
+- Spike stress test: 1,200 interleaved queries (`example.com` served;
+  `www.`, `x.www.`, `aN.b.` children) at 48 in parallel, zero misclassifications.
+- This relies on BIND's probe order, so integration tests cover parent/child
+  sequences to catch changes on upgrades.
+
+`findzonedb` also does the only database round trip per query: it runs
+`cadns.dlz_lookup(name, '@')`, succeeds if rows come back, and caches them in
+the same thread-local for the `dlz_lookup` callbacks that follow. A served name
+costs one round trip, the answer cannot change between the two callbacks, and
+a database error only happens in `findzonedb`, where BIND fails open (see §5).
 
 ### ADR-3: The measurement queue is a PostgreSQL table
 
@@ -130,7 +176,7 @@ single-row `cadns.settings` table, so they change without a migration.
 - **SOA/NS at `@`:** synthesised from `settings.ns_name` / `hostmaster`. Their TTL
   and the SOA minimum equal the smallest RRset TTL, so negative answers never
   outlive the data. The serial is the latest `resolved_at` as a Unix timestamp.
-  Child names (`x.www.example.com`) have no records (NXDOMAIN; see §5).
+  Child names never reach `dlz_lookup` because the module only serves exact qnames (ADR-8).
 - Names are matched case-insensitively and without trailing dot (BIND may pass
   0x20-randomised case).
 - Later options: weighted random selection (the paper's load-balancing mitigation), an
@@ -189,14 +235,41 @@ DB roles: `cadns_dlz` may only `EXECUTE` the two DLZ functions (they are
 `SECURITY DEFINER`; the role has no table privileges); `cadns_app` has DML on
 all tables and is used by the Python services; migrations run as the owner.
 
-## 5. Known risks (validated early, in the Phase 2 spike)
+## 5. Known risks
 
-| Risk | Why | Mitigation to evaluate |
-|------|-----|------------------------|
-| DLZ makes BIND authoritative for the **whole name** | A hit on `www.youtube.com` means queries for other types there (e.g. HTTPS, TXT) get NODATA, and children like `x.www.youtube.com` get NXDOMAIN | Measure real impact. `findzone` succeeds only for names with fresh data. Possibly synthesise referrals for non-served types/children, or accept and document |
-| Authoritative negative answers need SOA/NS | BIND expects apex SOA/NS in a DLZ zone | `dlz_lookup` synthesises SOA + NS at `@` |
+### 5.1 Phase 2 spike results (2026-09-15)
+
+Spike: a throwaway file-driven DLZ module on Debian trixie BIND 9.20.26
+(arm64), recursion enabled, dnstap to `fstrm_capture`.
+
+| # | Question | Result |
+|---|----------|--------|
+| 1 | Hit | `aa` answer from DLZ; one `findzonedb` + one `lookup(@)` for A/AAAA |
+| 2 | Miss | `findzonedb` for every suffix down to the TLD (never the root), then normal recursion |
+| 3 | DLZ vs. recursive cache | DLZ wins even when the name is cached; removing the name falls back to the cached answer. No cache flush needed after measuring |
+| 4 | SOA/NS at `@` | Positive answers work without them, but **negative answers without an SOA are SERVFAIL** → synthesise SOA + NS (done in `dlz_lookup`) |
+| 5 | Other qtypes on a served name (HTTPS, TXT, MX) | Authoritative NODATA with our SOA |
+| 6 | Children of a served name | Authoritative NXDOMAIN (also looks up `*` and the child label) → ADR-8 |
+| 7 | Delegating children back | Fake NS: SERVFAIL. Real parent NS: positive answers work, negative answers SERVFAIL → rejected |
+| 8 | `findzonedb` returns `ISC_R_FAILURE` (DB error) | Probe loop stops; answer from cache/recursion (**fail-open**) for the name and its children |
+| 9 | `lookup` returns `ISC_R_FAILURE` after `findzonedb` succeeded | **SERVFAIL** → do the DB work in `findzonedb` (ADR-8) |
+| 10 | Mixed-case qname (0x20) | Names reach the module lowercase; answer keeps the client's case |
+| 11 | DNSSEC | Served answers never have `ad` or RRSIG, even with `+dnssec`; recursed answers are unaffected (`ad`) |
+| 12 | dnstap | Available in the Debian build; `aa` visible in `CLIENT_RESPONSE`; lossy (ADR-2) |
+| 13 | Container without IPv6 | named tries IPv6 root servers, which slows cold-cache priming enough to SERVFAIL the first queries → run `named -4` unless the network has IPv6 |
+
+### 5.2 Risk register
+
+| Risk | Why | Status / mitigation |
+|------|-----|---------------------|
+| DLZ makes BIND authoritative for the served name | Other qtypes at a served name (HTTPS, TXT, MX, CAA, ...) get authoritative NODATA (spike #5) | **Open (v1: accept).** Clients fall back from HTTPS/SVCB to A/AAAA; served names are mostly hostnames. Later: store and serve HTTPS/SVCB (rewriting address hints) |
+| Children of served names | Would be authoritative NXDOMAIN (spike #6) | **Mitigated** by exact-qname matching (ADR-8) |
+| Authoritative negative answers need SOA/NS | NODATA without SOA is SERVFAIL (spike #4) | **Mitigated:** `dlz_lookup` synthesises SOA + NS at `@` |
+| DB outage | Resolver must keep working | **Mitigated:** `findzonedb` errors fail open (spike #8); lookups never hit the DB (ADR-8) |
 | CNAME flattening | We answer A records directly at the qname | Intended; TTL is the minimum over the chain |
-| DNSSEC | Synthesised answers can't carry valid signatures | Serve only to non-validating stubs; never set AD; document |
+| DNSSEC | Synthesised answers can't carry valid signatures (spike #11) | Serve only to non-validating stubs; never set AD; document |
+| DLZ calls block BIND threads | Each served-name probe runs a synchronous SQL call on a BIND worker thread | `statement_timeout_ms` (default 250), `connect_timeout` 2 s, reconnect backoff, pool sized to BIND's threads; measure in Phase 7 |
+| Probe-order dependency | ADR-8 relies on BIND's longest-first `findzonedb` order | Integration tests for parent/child sequences; re-run on BIND upgrades |
 | WattTime access tier | Free tier gives absolute MOER only for CAISO_NORTH; other regions only a relative index that can't be compared across regions | Research/paid account available. Still rate-limit, and cache per region |
 | IPinfo tier | WattTime needs lat/lon; IPinfo Lite has country/ASN only | Research/paid access available: city-level MMDB (primary), API (fallback) |
 | Anycast endpoints | IP geolocation is unreliable for anycast | v1: flag via anycast census prefixes and rank as unknown; later: traceroute-based location as in the paper |

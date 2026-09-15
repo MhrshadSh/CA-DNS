@@ -15,8 +15,8 @@ Built on BIND 9 + PostgreSQL (DLZ), inspired by
 - Architecture and design decisions: [docs/architecture.md](docs/architecture.md)
 - Build plan and status: [docs/ROADMAP.md](docs/ROADMAP.md)
 
-> Status: early development. Phases 0–1 (foundation, data model & answer policy) are done;
-> Phase 2 (BIND resolver + DLZ module) is next.
+> Status: early development. Phases 0–2 (foundation, data model & answer policy, BIND
+> resolver + DLZ module) are done; Phase 3 (measurement worker) is next.
 
 ## Development setup
 
@@ -29,6 +29,7 @@ make tools                         # uv, pre-commit (+ git hook), clang-format, 
 make env                           # create .env with a generated DB password
 make up                            # build, migrate and start the stack
 make seed                          # load demo data (*.example.test)
+make dig q=www.example.test        # query the resolver on 127.0.0.1:53
 make test                          # integration tests against the stack
 make psql                          # database shell
 ```

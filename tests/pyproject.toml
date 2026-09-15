@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "CA-DNS integration and end-to-end tests, run against the compose stack"
 requires-python = ">=3.12"
 dependencies = [
+    "dnspython>=2.8.0",
     "psycopg[binary]>=3.3.5",
     "pytest>=9.1.1",
 ]
@@ -13,3 +14,4 @@ package = false
 
 [tool.pytest.ini_options]
 addopts = ["-ra", "--strict-markers", "-p", "no:cacheprovider"]
+markers = ["internet: needs the resolver to reach the Internet (recursion)"]

@@ -51,6 +51,10 @@ migrate: ## Apply pending database migrations
 seed: ## Load demo data (db/seed) into the database
 	$(COMPOSE) run --rm --build migrate seed
 
+.PHONY: dig
+dig: ## Query the resolver (make dig q="www.example.test AAAA")
+	dig @$(or $(RESOLVER_LISTEN),127.0.0.1) $(q)
+
 .PHONY: psql
 psql: ## Open a psql shell in the database
 	$(COMPOSE) exec postgres psql -U "$(POSTGRES_USER)" -d "$(POSTGRES_DB)"

@@ -55,6 +55,7 @@ make tools      # dev tools for your user (uv, pre-commit, clang-format, dig)
 make up         # build, run migrations, start stack (waits for healthchecks)
 make migrate | make seed   # apply migrations | load db/seed demo data
 make test       # integration tests in a container (make test a="-k ttl")
+make dig q="www.example.test AAAA"   # query the resolver (127.0.0.1:53 by default)
 make ps | make logs s=<service> | make psql
 make down       # stop, keep volumes
 make lint       # pre-commit on all tracked files
@@ -65,15 +66,18 @@ template `.env.example`).
 
 ## Pending work
 
-1. Phase 2: resolver (BIND 9.20 + `dlz_pgsql`), starting with the time-boxed spike (see ROADMAP).
-2. Open question: license (not chosen yet; BIND's vendored `dlz_minimal.h` is MPL-2.0).
+1. Phase 3: measurement worker (see ROADMAP). First Python package code under `services/`.
+2. Open question: license (not chosen yet; the vendored `dlz_minimal.h` is ISC-licensed).
 
 ## Conventions
 
 - **Python:** 3.12+, package `cadns` under `services/`, managed with `uv`; ruff
   for lint/format (root `ruff.toml`); pytest.
-- **C (DLZ module):** `resolver/dlz_pgsql/`, clang-format; the vendored
-  `dlz_minimal.h` stays byte-identical to upstream.
+- **C (DLZ module):** `resolver/dlz_pgsql/`, clang-format (`resolver/dlz_pgsql/.clang-format`);
+  the vendored `dlz_minimal.h` (ISC dlz-modules commit `068c1e5`) stays byte-identical.
+  Keep BIND-independent logic in `src/util.c` with unit tests in `tests/` (run by the image build).
+  The module serves exact qnames only and never queries the DB in `dlz_lookup` (ADR-8).
+- **Resolver image:** Debian trixie `bind9` pinned by package version (ISC images are amd64-only).
 - **SQL:** ordered migrations in `db/migrations/NNNN_name.sql`; never edit an applied
   one (checksummed), add a new migration. The answer policy lives in SQL functions
   (`cadns.dlz_findzone`, `cadns.dlz_lookup`).
