@@ -46,8 +46,12 @@ the paper's author.
 
 ## Commands
 
+One-time host setup: `sudo scripts/dev/bootstrap-vm.sh`. Tools land in
+`~/.local/bin`, so make sure it is on `PATH`.
+
 ```bash
 make            # list targets
+make tools      # dev tools for your user (uv, pre-commit, clang-format, dig)
 make up         # build + start stack (waits for healthchecks)
 make ps | make logs s=<service> | make psql
 make down       # stop, keep volumes
@@ -59,18 +63,8 @@ template `.env.example`).
 
 ## Pending work
 
-1. **Phase 0 rework (do first):** the repo was set up to be driven from a Mac.
-   Convert it to VM-local:
-   - Remove the Makefile targets `bootstrap-mac`, `vm-copy-key`, `vm-bootstrap`
-     and `context`, and remove `VM_SSH` / `DOCKER_CONTEXT` from `.env.example`, `.env` and the Makefile.
-   - Make `scripts/dev/bootstrap-vm.sh` run locally (`sudo scripts/dev/bootstrap-vm.sh`)
-     and add a `make` target that installs dev tools on the VM (uv, pre-commit,
-     clang-format, dnsutils), replacing `scripts/dev/Brewfile`.
-   - Drop the "no bind mounts" rationale in `compose.yaml`. Keep config baked
-     into images where that is production-like.
-   - Update the README dev-setup section and ROADMAP Phase 0 to match.
-2. Phase 1: data model & answer policy (see ROADMAP).
-3. Open question: license (not chosen yet; BIND's vendored `dlz_minimal.h` is MPL-2.0).
+1. Phase 1: data model & answer policy (see ROADMAP).
+2. Open question: license (not chosen yet; BIND's vendored `dlz_minimal.h` is MPL-2.0).
 
 ## Conventions
 

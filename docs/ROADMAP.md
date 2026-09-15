@@ -57,29 +57,28 @@ Runtime data (IPinfo MMDB, local volumes) goes in `data/` and is gitignored.
 
 1. ✅ git repo, `.gitignore`, `.gitattributes`, `.editorconfig`, `.env.example`, `README.md`.
    License still to be decided.
-2. **Dev host = Docker Engine inside the Ubuntu 22.04 arm64 VM** (VMware Fusion):
-   - ✅ `scripts/dev/Brewfile` (`make bootstrap-mac`): the Mac gets only the docker CLI
-     plus tooling, not Docker Desktop.
-   - ✅ `scripts/dev/bootstrap-vm.sh` (`make vm-bootstrap`): installs Docker Engine
-     and the compose plugin, adds the user to the `docker` group, sets up log rotation,
-     and frees port 53 by disabling the systemd-resolved stub listener. It pins
+2. **Dev host = the Ubuntu 22.04 arm64 VM** (VMware Fusion). The repo, the tools and
+   Docker Engine all live there; there is no Mac-side tooling and no remote docker context.
+   - ✅ `scripts/dev/bootstrap-vm.sh` (`sudo scripts/dev/bootstrap-vm.sh`): installs Docker
+     Engine and the compose/buildx plugins, adds the user to the `docker` group, sets up log
+     rotation, and frees port 53 by disabling the systemd-resolved stub listener. It pins
      host DNS to public resolvers, because VMware Fusion's NAT DNS proxy
      garbles EDNS replies and breaks image pulls.
-   - ✅ `make vm-copy-key`: key-based SSH, which the docker context needs.
-   - ✅ `make context`: `docker context create cadns-vm --docker host=ssh://…`.
-     Builds and runs happen in the VM; you edit on the Mac.
-     **Rule:** no bind mounts from the repo, because paths would resolve on the VM.
-     Config is baked into images; data lives in named volumes.
+   - ✅ `scripts/dev/install-tools.sh` (`make tools`): pinned uv, pre-commit (and its git hook)
+     and clang-format for the current user, no root needed. dnsutils comes from apt if missing.
+   - Config is baked into images where that is production-like; data lives in named volumes.
 3. ✅ `compose.yaml` with only `postgres` (PostgreSQL 18, named volume, healthcheck,
    internal `backend` network).
-4. ✅ `Makefile`: `env`, `up`, `down`, `ps`, `logs`, `psql`, `nuke`, `lint`, `help`.
+4. ✅ `Makefile`: `tools`, `env`, `up`, `down`, `ps`, `logs`, `psql`, `nuke`, `lint`, `help`.
 5. ✅ `.pre-commit-config.yaml`: whitespace/YAML/private-key checks, shellcheck,
    ruff, clang-format. `uv` + `pytest` arrive with the first Python code (Phase 1).
 
-**Exit:** from the Mac, `docker --context cadns-vm compose version` works and
-`make up && make psql` gives a PostgreSQL prompt running in the VM.
+**Exit:** on the VM, `make tools && make lint` passes and `make up && make psql` gives a
+PostgreSQL prompt.
 ✅ Verified 2026-09-14: PostgreSQL 18.6 healthy on the VM (linux/arm64); the `backend`
 network has no Internet access; pre-commit hooks pass.
+✅ Reworked to a VM-local workflow and re-verified 2026-09-15: `make tools` is idempotent
+(uv 0.12.14, pre-commit 4.6.2, clang-format 23.1.1), `make lint` passes, PostgreSQL 18.6 healthy.
 
 ---
 

@@ -19,17 +19,15 @@ Built on BIND 9 + PostgreSQL (DLZ), inspired by
 
 ## Development setup
 
-Code is edited on the Mac; containers run on a Docker Engine inside an Ubuntu
-VM, driven through a remote docker context over SSH.
+Everything runs on the Ubuntu 22.04 VM that holds this repository: the code,
+the developer tools and the Docker Engine that runs the stack.
 
 ```bash
-make bootstrap-mac   # docker CLI, uv, pre-commit, clang-format, dig
-make env             # create .env (then set VM_SSH=user@vm-ip)
-make vm-copy-key     # key-based SSH to the VM
-make vm-bootstrap    # install Docker on the VM, free port 53
-make context         # create the 'cadns-vm' docker context
-make up              # start the stack
-make psql            # database shell
+sudo scripts/dev/bootstrap-vm.sh   # once: Docker Engine, log rotation, free port 53, host DNS
+make tools                         # uv, pre-commit (+ git hook), clang-format, dig
+make env                           # create .env with a generated DB password
+make up                            # build and start the stack
+make psql                          # database shell
 ```
 
 Run `make` to see all targets.

@@ -2,8 +2,8 @@
 #
 # Prepare an Ubuntu 22.04/24.04 VM as the CA-DNS Docker host.
 #
-# Idempotent: safe to run again. Must run as root (via sudo):
-#   make vm-bootstrap
+# Idempotent: safe to run again. Run on the VM from the repo root, via sudo:
+#   sudo scripts/dev/bootstrap-vm.sh            # GROW_ROOT=1 also grows the root volume
 #
 # What it does:
 #   0. (opt-in, GROW_ROOT=1) Grows the root LVM volume into free VG space.
@@ -145,4 +145,4 @@ if ss -lntu | grep -qE '[:.]53\s'; then
 else
     echo "Port 53 is free."
 fi
-echo "Log out and back in (or reconnect SSH) for docker group membership to apply."
+echo "Log out and back in (or run 'newgrp docker') for docker group membership to apply."

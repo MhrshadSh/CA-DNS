@@ -1,9 +1,7 @@
 # CA-DNS service stack.
 #
-# Runs against a remote Docker engine (the Ubuntu VM) through a docker context,
-# so services must not bind-mount files from the repo: bind-mount paths would
-# resolve on the VM, not on the Mac. Configuration is baked into images or
-# passed through environment variables; data lives in named volumes.
+# Configuration is baked into images (production-like) or passed through
+# environment variables from .env; data lives in named volumes.
 
 name: cadns
 
