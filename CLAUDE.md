@@ -52,7 +52,9 @@ One-time host setup: `sudo scripts/dev/bootstrap-vm.sh`. Tools land in
 ```bash
 make            # list targets
 make tools      # dev tools for your user (uv, pre-commit, clang-format, dig)
-make up         # build + start stack (waits for healthchecks)
+make up         # build, run migrations, start stack (waits for healthchecks)
+make migrate | make seed   # apply migrations | load db/seed demo data
+make test       # integration tests in a container (make test a="-k ttl")
 make ps | make logs s=<service> | make psql
 make down       # stop, keep volumes
 make lint       # pre-commit on all tracked files
@@ -63,16 +65,20 @@ template `.env.example`).
 
 ## Pending work
 
-1. Phase 1: data model & answer policy (see ROADMAP).
+1. Phase 2: resolver (BIND 9.20 + `dlz_pgsql`), starting with the time-boxed spike (see ROADMAP).
 2. Open question: license (not chosen yet; BIND's vendored `dlz_minimal.h` is MPL-2.0).
 
 ## Conventions
 
 - **Python:** 3.12+, package `cadns` under `services/`, managed with `uv`; ruff
-  for lint/format; pytest.
+  for lint/format (root `ruff.toml`); pytest.
 - **C (DLZ module):** `resolver/dlz_pgsql/`, clang-format; the vendored
   `dlz_minimal.h` stays byte-identical to upstream.
-- **SQL:** ordered migrations in `db/migrations/NNNN_name.sql`. The answer policy
-  lives in SQL functions (`cadns.dlz_findzone`, `cadns.dlz_lookup`).
+- **SQL:** ordered migrations in `db/migrations/NNNN_name.sql`; never edit an applied
+  one (checksummed), add a new migration. The answer policy lives in SQL functions
+  (`cadns.dlz_findzone`, `cadns.dlz_lookup`).
+- **Tests:** integration tests are a separate uv project in `tests/`, run in the `tests`
+  compose service (Postgres has no host port); each test is a rolled-back transaction.
+  Generate `tests/uv.lock` inside the pinned Python image (host Python is 3.10).
 - **Shell:** `set -Eeuo pipefail`, idempotent, shellcheck-clean.
 - Pin image and tool versions. Verify current versions instead of assuming them.

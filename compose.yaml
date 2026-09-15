@@ -7,7 +7,7 @@ name: cadns
 
 services:
   postgres:
-    image: postgres:${POSTGRES_VERSION:-18}-bookworm
+    image: postgres:${POSTGRES_VERSION:-18.6}-bookworm
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-cadns}
@@ -24,6 +24,48 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+
+  # One-shot: apply db/migrations, then exit. Later services depend on it with
+  # condition: service_completed_successfully.
+  migrate:
+    build:
+      context: ./db
+      args:
+        POSTGRES_VERSION: ${POSTGRES_VERSION:-18.6}
+    image: cadns-migrate:dev
+    restart: "no"
+    # The postgres base image declares VOLUME /var/lib/postgresql; mount a tmpfs
+    # there so client-only runs don't leave anonymous volumes behind.
+    tmpfs:
+      - /var/lib/postgresql
+    environment: &db-owner-env
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-cadns}
+      PGUSER: ${POSTGRES_USER:-cadns_owner}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      CADNS_DLZ_PASSWORD: ${CADNS_DLZ_PASSWORD:?set CADNS_DLZ_PASSWORD in .env (run `make env`)}
+      CADNS_APP_PASSWORD: ${CADNS_APP_PASSWORD:?set CADNS_APP_PASSWORD in .env (run `make env`)}
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Integration tests (make test). Runs as the owner inside rolled-back
+  # transactions, so the dev database is left untouched.
+  tests:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: tests/Dockerfile
+    image: cadns-tests:dev
+    restart: "no"
+    environment: *db-owner-env
+    networks:
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
 networks:
   # Services that only talk to each other (postgres). Services that need the

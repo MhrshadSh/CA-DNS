@@ -1,0 +1,15 @@
+[project]
+name = "cadns-tests"
+version = "0.1.0"
+description = "CA-DNS integration and end-to-end tests, run against the compose stack"
+requires-python = ">=3.12"
+dependencies = [
+    "psycopg[binary]>=3.3.5",
+    "pytest>=9.1.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+addopts = ["-ra", "--strict-markers", "-p", "no:cacheprovider"]

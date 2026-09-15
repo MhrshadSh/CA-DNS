@@ -15,7 +15,8 @@ Built on BIND 9 + PostgreSQL (DLZ), inspired by
 - Architecture and design decisions: [docs/architecture.md](docs/architecture.md)
 - Build plan and status: [docs/ROADMAP.md](docs/ROADMAP.md)
 
-> Status: early development. Phase 0 (foundation) is done; Phase 1 (data model) is next.
+> Status: early development. Phases 0–1 (foundation, data model & answer policy) are done;
+> Phase 2 (BIND resolver + DLZ module) is next.
 
 ## Development setup
 
@@ -26,7 +27,9 @@ the developer tools and the Docker Engine that runs the stack.
 sudo scripts/dev/bootstrap-vm.sh   # once: Docker Engine, log rotation, free port 53, host DNS
 make tools                         # uv, pre-commit (+ git hook), clang-format, dig
 make env                           # create .env with a generated DB password
-make up                            # build and start the stack
+make up                            # build, migrate and start the stack
+make seed                          # load demo data (*.example.test)
+make test                          # integration tests against the stack
 make psql                          # database shell
 ```
 

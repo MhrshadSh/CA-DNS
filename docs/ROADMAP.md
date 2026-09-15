@@ -18,6 +18,7 @@ CA-DNS/
 ├── Makefile                  # make up / down / test / lint / logs / dig
 ├── compose.yaml              # postgres, resolver, collector, monitor, worker
 ├── .env.example              # all configuration knobs, no secrets
+├── ruff.toml                 # Python lint/format config for the whole repo
 ├── docs/
 │   ├── architecture.md
 │   ├── ROADMAP.md
@@ -26,7 +27,7 @@ CA-DNS/
 │   ├── Dockerfile
 │   ├── config/               # named.conf (+ includes)
 │   └── dlz_pgsql/            # C module: src/, include/dlz_minimal.h, Makefile, tests/
-├── db/
+├── db/                       # cadns-migrate image: Dockerfile, migrate.sh
 │   ├── migrations/           # 0001_init.sql, 0002_dlz_functions.sql, ...
 │   └── seed/                 # fixture data for tests/demos
 ├── services/                 # Python package `cadns` (one image, several entrypoints)
@@ -42,7 +43,7 @@ CA-DNS/
 │   │   ├── geo/              # IPinfo (MMDB + API fallback)
 │   │   └── carbon/           # WattTime client
 │   └── tests/                # unit tests
-├── tests/                    # integration & end-to-end (dig against compose stack)
+├── tests/                    # integration & e2e (uv project + Dockerfile, run in compose)
 ├── scripts/                  # dev helpers
 └── .github/workflows/        # CI
 ```
@@ -82,21 +83,27 @@ network has no Internet access; pre-commit hooks pass.
 
 ---
 
-## Phase 1: Data model & answer policy (SQL) ⬜
+## Phase 1: Data model & answer policy (SQL) ✅
 
 **Goal:** the database can answer "what is the greenest RRset for X?"
 
-1. Migration runner (plain ordered `.sql` files applied by a one-shot compose service).
-2. `0001_init.sql`: tables from architecture §4, indexes, roles `cadns_dlz` / `cadns_app`.
-3. `0002_dlz_functions.sql`:
-   - `cadns.dlz_findzone(name)`: true only if a fresh A/AAAA RRset exists.
+1. ✅ Migration runner (plain ordered `.sql` files applied by a one-shot compose service):
+   `db/Dockerfile` + `db/migrate.sh` (`make migrate`, run by `make up`), checksummed,
+   one transaction per file; syncs role passwords from `.env` (ADR-6).
+2. ✅ `0001_init.sql`: tables from architecture §4, constraints, indexes, the `settings`
+   table, roles `cadns_dlz` / `cadns_app`.
+3. ✅ `0002_dlz_functions.sql`:
+   - `cadns.dlz_findzone(name)`: true only if every stored A/AAAA RRset type has fresh data.
    - `cadns.dlz_lookup(zone, name)` returns `(ttl, type, data)`: greenest-k records
      plus synthesised SOA/NS at `@`.
-4. `db/seed/`: a few domains with endpoints in regions of different MOER.
-5. SQL tests (pytest + psycopg): ordering, tie-breaking, unknown MOER, expiry, TTL clamp.
+4. ✅ `db/seed/demo.sql` (`make seed`): a few domains with endpoints in regions of different MOER.
+5. ✅ SQL tests (pytest + psycopg, `make test`): ordering, tie-breaking, unknown MOER, expiry,
+   TTL clamp, name normalisation, schema constraints, role privileges (ADR-7).
 
 **Exit:** `SELECT * FROM cadns.dlz_lookup('www.example.test','@')` returns the
 lowest-MOER seeded address, and tests pass.
+✅ Verified 2026-09-15: on the dev DB and on a fresh throwaway project, migrations apply
+from empty, the query returns `192.0.2.10` (A) and `2001:db8::10` (AAAA), and 46 tests pass.
 
 ---
 

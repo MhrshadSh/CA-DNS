@@ -17,16 +17,19 @@ tools: ## Install dev tools for your user (uv, pre-commit, clang-format, dig)
 	scripts/dev/install-tools.sh
 
 .PHONY: env
-env: ## Create .env from .env.example with a generated DB password
+env: ## Create .env from .env.example with generated passwords
 	@if [[ -f .env ]]; then echo ".env already exists, leaving it untouched"; exit 0; fi
-	@sed "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$$(openssl rand -hex 24)|" .env.example > .env
+	@while IFS= read -r line; do \
+		if [[ $$line == *=change-me ]]; then echo "$${line%%=*}=$$(openssl rand -hex 24)"; else echo "$$line"; fi; \
+	done < .env.example > .env
 	@echo "Created .env"
 
 ##@ Stack
 
 .PHONY: up
-up: ## Build and start all services
-	$(COMPOSE) up -d --build --wait
+up: ## Build, apply migrations, and start all services
+	$(COMPOSE) run --rm --build migrate
+	$(COMPOSE) up -d --build --wait $$($(COMPOSE) config --services | grep -vx migrate)
 
 .PHONY: down
 down: ## Stop all services (keeps data volumes)
@@ -40,6 +43,14 @@ ps: ## Show service status
 logs: ## Follow logs (optionally: make logs s=postgres)
 	$(COMPOSE) logs -f --tail=100 $(s)
 
+.PHONY: migrate
+migrate: ## Apply pending database migrations
+	$(COMPOSE) run --rm --build migrate
+
+.PHONY: seed
+seed: ## Load demo data (db/seed) into the database
+	$(COMPOSE) run --rm --build migrate seed
+
 .PHONY: psql
 psql: ## Open a psql shell in the database
 	$(COMPOSE) exec postgres psql -U "$(POSTGRES_USER)" -d "$(POSTGRES_DB)"
@@ -50,6 +61,10 @@ nuke: ## Stop services AND delete all data volumes (asks for confirmation)
 	$(COMPOSE) down -v
 
 ##@ Quality
+
+.PHONY: test
+test: ## Run integration tests against the stack (pytest args: make test a="-k ttl")
+	$(COMPOSE) --profile test run --rm --build tests $(a)
 
 .PHONY: lint
 lint: ## Run all pre-commit hooks on the whole repo

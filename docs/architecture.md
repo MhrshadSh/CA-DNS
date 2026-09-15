@@ -111,29 +111,83 @@ a few regions.
 
 ### ADR-5: Answer policy (default, configurable)
 
-- Candidates: union of fresh A (or AAAA) records from all upstream resolvers.
-- Order: MOER ascending; endpoints with unknown MOER rank last; ties are broken randomly.
-- Return the top `k` addresses (default `k = 1`, as in the paper).
-- TTL to client: `min(remaining RRset TTL, carbon refresh interval)`.
+Implemented in SQL (`db/migrations/0002_dlz_functions.sql`); knobs live in the
+single-row `cadns.settings` table, so they change without a migration.
+
+- **Serve or recurse** (`dlz_findzone`): answer authoritatively only if the name
+  has stored A/AAAA data **and every stored RRset type still has a fresh record**.
+  If AAAA has expired while A is fresh, serving the zone would turn AAAA
+  queries into authoritative NODATA and break IPv6 clients, so the name falls
+  back to recursion until it is re-measured.
+- **Candidates:** union of fresh A (or AAAA) records from all upstream resolvers,
+  one row per address (an address stays valid while any resolver's record does).
+- **Order:** latest MOER of the endpoint's region, ascending. Unknown MOER ranks
+  last: no geolocation, no region, no carbon signal, or anycast. Ties are broken randomly.
+- **Selection:** the top `answer_k` addresses per type (default 1, as in the paper).
+  If every candidate is unknown, CA-DNS still answers (equivalent to the random baseline).
+- **TTL:** per RRset, `min(remaining TTL of the returned records, max_answer_ttl)`,
+  at least 1 s. `max_answer_ttl` defaults to 300 s (the carbon refresh interval).
+- **SOA/NS at `@`:** synthesised from `settings.ns_name` / `hostmaster`. Their TTL
+  and the SOA minimum equal the smallest RRset TTL, so negative answers never
+  outlive the data. The serial is the latest `resolved_at` as a Unix timestamp.
+  Child names (`x.www.example.com`) have no records (NXDOMAIN; see §5).
+- Names are matched case-insensitively and without trailing dot (BIND may pass
+  0x20-randomised case).
 - Later options: weighted random selection (the paper's load-balancing mitigation), an
   RTT guard.
 
-## 4. Data model (initial sketch)
+### ADR-6: Plain SQL migrations applied by a one-shot container
+
+Migrations are ordered `db/migrations/NNNN_name.sql` files baked into the
+`cadns-migrate` image (built from the same `postgres` image as the server, so
+`psql` matches). `make up` runs it before starting services; later services
+depend on it with `service_completed_successfully`.
+
+- Each file runs in one transaction together with its row in
+  `public.schema_migrations` (version + SHA-256). Editing an applied migration
+  is an error: add a new one instead.
+- Roles are created `NOLOGIN` in SQL (no secrets in the repo). After migrating,
+  the runner sets `LOGIN` + passwords from `CADNS_DLZ_PASSWORD` / `CADNS_APP_PASSWORD`.
+- No migration framework: the schema is small, and SQL functions are the
+  product here, so plain SQL keeps them reviewable.
+
+### ADR-7: Integration tests run in a container on the backend network
+
+PostgreSQL has no published port (the `backend` network is internal), so
+tests run in a `tests` compose service (profile `test`, `make test`): a uv
+project in `tests/` with pytest + psycopg. Each test works inside a transaction
+that is rolled back, so tests never disturb the dev database or each other,
+and `now()` is fixed for the whole test, which makes TTL checks exact.
+
+## 4. Data model
+
+Schema `cadns`, defined in `db/migrations/0001_init.sql` (the source of truth):
 
 ```
-domains          (id, name UNIQUE, first_seen_at, last_queried_at, hit_count, status)
-rrset_records    (domain_id, rtype, address INET, resolver, ttl, resolved_at, expires_at,
-                  PK(domain_id, rtype, address, resolver))
+settings         (singleton PK, answer_k, max_answer_ttl, ns_name, hostmaster, updated_at)
+domains          (id PK, name UNIQUE, status, first_seen_at, measured_at,
+                  last_queried_at, hit_count)
+                  status ∈ {pending, resolved, nxdomain, nodata, failed}
+rrset_records    (domain_id FK, rtype {A, AAAA}, address FK→endpoints, resolver INET,
+                  ttl, resolved_at, expires_at, PK(domain_id, rtype, address, resolver))
 endpoints        (address INET PK, lat, lon, city, country, asn, is_anycast,
                   region_code FK, geo_source, geo_updated_at)
 grid_regions     (code PK, name, provider)
-carbon_signals   (region_code, moer_g_per_kwh, point_time, fetched_at)   -- latest per region used
-measurement_queue(domain UNIQUE, reason {miss, expired}, enqueued_at, attempts,
-                  next_attempt_at, locked_by, locked_at, last_error)
+carbon_signals   (region_code FK, point_time, moer_g_per_kwh, fetched_at,
+                  PK(region_code, point_time))              -- latest point per region used
+measurement_queue(domain PK, reason {miss, expired}, state {pending, dead}, enqueued_at,
+                  attempts, next_attempt_at, locked_by, locked_at, last_error)
 ```
 
-DB roles: `cadns_dlz` may only `EXECUTE` the two DLZ functions (read-only);
-`cadns_app` is used by the Python services; migrations run as owner.
+Constraints keep the data canonical: domain names are lowercase without
+trailing dot; A records hold IPv4 host addresses and AAAA records IPv6 ones;
+MOER is stored in gCO2/kWh (WattTime reports lbs/MWh; the worker converts).
+Every endpoint referenced by a record has an `endpoints` row, even before it
+is geolocated.
+
+DB roles: `cadns_dlz` may only `EXECUTE` the two DLZ functions (they are
+`SECURITY DEFINER`; the role has no table privileges); `cadns_app` has DML on
+all tables and is used by the Python services; migrations run as the owner.
 
 ## 5. Known risks (validated early, in the Phase 2 spike)
 
@@ -148,3 +202,4 @@ DB roles: `cadns_dlz` may only `EXECUTE` the two DLZ functions (read-only);
 | Anycast endpoints | IP geolocation is unreliable for anycast | v1: flag via anycast census prefixes and rank as unknown; later: traceroute-based location as in the paper |
 | Upstream vantage point | Public anycast resolvers answer for *their* PoP near the container, not the client | Deploy close to clients; ECS support later |
 | Open resolver | Recursive + public port 53 | `allow-recursion` / `allow-query` ACLs by default |
+| DLZ functions owned by a superuser | The `SECURITY DEFINER` functions run as the migration owner, which is the image's superuser in dev | Phase 6: dedicated non-superuser owner role |
