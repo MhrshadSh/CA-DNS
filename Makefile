@@ -60,12 +60,14 @@ measure: ## Measure one domain now and store the result (make measure d=www.yout
 	@mkdir -p data/ipinfo
 	$(COMPOSE) --profile tools run --rm --build cli measure $(d)
 
+IPINFO_DB ?= ipinfo_location
+
 .PHONY: ipinfo-db
-ipinfo-db: ## Download the IPinfo Core MMDB into data/ipinfo (needs database access on CADNS_IPINFO_TOKEN)
+ipinfo-db: ## Download an IPinfo MMDB into data/ipinfo (IPINFO_DB=ipinfo_location|ipinfo_core)
 	@mkdir -p data/ipinfo
-	@curl -fsSL -o data/ipinfo/ipinfo_core.mmdb.tmp "https://ipinfo.io/data/ipinfo_core.mmdb?token=$(CADNS_IPINFO_TOKEN)"
-	@mv data/ipinfo/ipinfo_core.mmdb.tmp data/ipinfo/ipinfo_core.mmdb
-	@ls -lh data/ipinfo/ipinfo_core.mmdb
+	@curl -fsSL -o data/ipinfo/$(IPINFO_DB).mmdb.tmp "https://ipinfo.io/data/$(IPINFO_DB).mmdb?token=$(CADNS_IPINFO_TOKEN)"
+	@mv data/ipinfo/$(IPINFO_DB).mmdb.tmp data/ipinfo/$(IPINFO_DB).mmdb
+	@ls -lh data/ipinfo/$(IPINFO_DB).mmdb
 
 .PHONY: psql
 psql: ## Open a psql shell in the database

@@ -29,7 +29,7 @@ def build_geolocator(settings: Settings, http: httpx.AsyncClient) -> Geolocator 
     if not sources:
         log.warning("no IPinfo MMDB or token configured: endpoints stay unlocated")
         return None
-    return Geolocator(sources)
+    return Geolocator(sources, anycast_lookup=settings.anycast_lookup)
 
 
 def build_watttime(settings: Settings, http: httpx.AsyncClient) -> WattTimeClient | None:

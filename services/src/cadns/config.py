@@ -22,8 +22,11 @@ class Settings(BaseSettings):
     resolver_timeout: float = Field(default=2.0, gt=0, le=30)
 
     # IPinfo: MMDB (used if the file exists) with API fallback (if a token is set).
-    ipinfo_mmdb: Path | None = Path("/data/ipinfo/ipinfo_core.mmdb")
+    ipinfo_mmdb: Path | None = Path("/data/ipinfo/ipinfo_location.mmdb")
     ipinfo_token: SecretStr | None = None
+    # The IP-to-Geolocation MMDB has no anycast field; look it up through the
+    # API for endpoints that are new or stale (ADR-5 ranks anycast as unknown).
+    anycast_lookup: bool = True
     geo_max_age_days: int = Field(default=30, ge=1)
 
     # WattTime.

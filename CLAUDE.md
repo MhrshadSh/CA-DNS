@@ -56,7 +56,7 @@ make up         # build, run migrations, start stack (waits for healthchecks)
 make migrate | make seed   # apply migrations | load db/seed demo data
 make test       # all tests: test-services (unit + DB) and test-integration (pytest args: a="-k ttl")
 make measure d=www.youtube.com   # one-off measurement (cli service, needs API creds in .env)
-make ipinfo-db  # download IPinfo Core MMDB into data/ipinfo (enterprise DB access)
+make ipinfo-db  # download IPinfo MMDB into data/ipinfo (IPINFO_DB=ipinfo_location|ipinfo_core)
 make dig q="www.example.test AAAA"   # query the resolver (127.0.0.1:53 by default)
 make ps | make logs s=<service> | make psql
 make down       # stop, keep volumes
@@ -68,7 +68,7 @@ template `.env.example`).
 
 ## Pending work
 
-1. Phase 3: measurement worker (see ROADMAP). First Python package code under `services/`.
+1. Phase 4: queue & collector ("Aggregate") — see ROADMAP.
 2. Open question: license (not chosen yet; the vendored `dlz_minimal.h` is ISC-licensed).
 
 ## Conventions

@@ -139,7 +139,7 @@ once the database is back.
 
 ---
 
-## Phase 3: Measurement worker 🟨
+## Phase 3: Measurement worker ✅
 
 **Goal:** given a domain, produce a complete measurement in the DB.
 
@@ -158,9 +158,12 @@ once the database is back.
 
 **Exit:** `cadns measure www.youtube.com` populates the DB, and a `dig` through BIND
 now returns the greenest endpoint.
-🟨 2026-09-15: without API credentials, a real run stores the 16 addresses from all 5
-resolvers and BIND answers `www.youtube.com` with `aa` (random among unknown MOER).
-Pending: run with WattTime + IPinfo credentials.
+✅ Verified 2026-09-16 with real credentials (IPinfo IP-to-Geolocation MMDB + API,
+WattTime): `make measure d=www.youtube.com` stores the 16 addresses aggregated from all
+5 resolvers, geolocated to CAISO_NORTH at 435 gCO2/kWh, with Google's anycast addresses
+ranked unknown; `make measure d=www.un.org` reaches NL at 532 gCO2/kWh and
+`dig @localhost www.un.org` returns the lowest-MOER endpoint with `aa`.
+55 service tests + 56 integration tests pass.
 
 ---
 
@@ -189,6 +192,8 @@ Pending: run with WattTime + IPinfo credentials.
    the activity window are enqueued with `reason = expired`.
 2. Carbon refresh: every 5 min, refresh MOER for regions that have active endpoints.
 3. GC: delete domains that have been inactive longer than the retention period.
+   Short upstream TTLs (CDN records of 20 s) make this the component that decides how
+   often active names are re-measured; evaluate a minimum record TTL here (ADR-9).
 4. Tests with a controllable clock.
 
 **Exit:** a queried domain stays a hit indefinitely while it keeps being queried; carbon

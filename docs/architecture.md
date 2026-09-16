@@ -124,9 +124,14 @@ tolerate loss: a lost miss is simply enqueued on the next one.
      SOA negative TTL clamped to 5 min–1 h.
    - `failed`: existing records are kept (they expire); retry after 60 s.
 3. **Geolocate** addresses not geolocated in the last 30 days: IPinfo MMDB
-   (`ipinfo_core.mmdb`, if present), then the IPinfo API (Bearer token, so
-   tokens never appear in URLs or logs). Non-global addresses are skipped.
-   Endpoints without coordinates are stored and rank as unknown MOER.
+   (`data/ipinfo`, default the IP-to-Geolocation database), then the IPinfo API
+   (Bearer token, so tokens never appear in URLs or logs; `api.ipinfo.io/lookup`
+   with a per-call fallback to `ipinfo.io/<ip>/json`, since plans differ).
+   Non-global addresses are skipped. Endpoints without coordinates are stored
+   and rank as unknown MOER. The IP-to-Geolocation database has no anycast
+   field, so when a database supplies coordinates without one, the flag is
+   fetched from the API once per endpoint (`CADNS_ANYCAST_LOOKUP`), because
+   ADR-5 ranks anycast endpoints as unknown.
 4. **Region:** WattTime `region-from-loc` per location rounded to 0.01°
    (~1 km), cached permanently in `cadns.location_regions` (IP geolocation
    returns city centroids, so many IPs share one lookup). Locations outside
@@ -145,9 +150,15 @@ and HTTP 429 is retried with `Retry-After`. Unit tests use DNS responses
 recorded from 8.8.8.8 and API responses shaped after the published schemas;
 database tests run as `cadns_app` on the internal network (no Internet).
 
-Open: short upstream TTLs are stored as-is. CDN hostnames often have 20 s TTLs
-(e.g. `www.bing.com` → Akamai), so their green answers expire quickly unless
-the monitor (Phase 5) re-measures them or a minimum record TTL is introduced.
+Short upstream TTLs are stored as-is: CDN hostnames often carry 20 s TTLs
+(e.g. `www.bing.com` → Akamai), so green answers expire quickly. Keeping them
+fresh is the monitor's job (Phase 5), not the worker's.
+
+Observed on the dev host (2026-09-16): the upstream resolvers answer from their
+PoP near this VM, so most candidates land in one grid region (the vantage-point
+risk in §5.2). Aggregating over resolvers still widens the set: for
+`www.bing.com`, 9.9.9.9 returned a different Akamai edge set than the other
+four resolvers.
 
 ### ADR-8: Serve exact query names only
 
