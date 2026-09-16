@@ -1,0 +1,13 @@
+{
+  "data": [{"point_time": "2026-09-15T12:05:00+00:00", "value": 850.0}],
+  "meta": {
+    "data_point_period_seconds": 300,
+    "region": "CAISO_NORTH",
+    "signal_type": "co2_moer",
+    "units": "lbs_co2_per_mwh",
+    "warnings": [],
+    "model": {"date": "2026-02-01", "type": "binned_regression"},
+    "generated_at_period_seconds": 300,
+    "generated_at": "2026-09-15T12:05:00+00:00"
+  }
+}

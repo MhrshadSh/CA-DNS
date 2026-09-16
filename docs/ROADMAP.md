@@ -139,23 +139,28 @@ once the database is back.
 
 ---
 
-## Phase 3: Measurement worker ⬜
+## Phase 3: Measurement worker 🟨
 
 **Goal:** given a domain, produce a complete measurement in the DB.
 
-1. `resolvers/`: query A and AAAA in parallel against the configured pool
+1. ✅ `resolvers/`: query A and AAAA in parallel against the configured pool
    (default: 8.8.8.8, 1.1.1.1, 9.9.9.9, 45.90.28.243, 208.67.222.222); follow CNAMEs;
    per-resolver timeout; record the source resolver and TTL.
-2. `geo/`: IPinfo MMDB reader (offline, primary) with API fallback, cached in `endpoints`.
-3. `carbon/`: WattTime v3 client with token refresh (`/login`), `region-from-loc`
-   (cached permanently per location), latest MOER per region (cached 5 min), and rate limiting.
-4. `worker/pipeline.py`: resolve → geolocate new IPs → ensure region MOER → a single
-   transaction upsert. Negative results (NXDOMAIN, no addresses) are stored with backoff.
-5. CLI: `cadns measure <domain>` for one-off runs. Unit tests use recorded
-   API fixtures, with no network in CI.
+2. ✅ `geo/`: IPinfo MMDB reader (offline, primary) with API fallback, cached in `endpoints`.
+3. ✅ `carbon/`: WattTime v3 client with token refresh (`/login`), `region-from-loc`
+   (cached permanently per location, `0003_measurement.sql`), current MOER per region
+   (refreshed after 5 min), and rate limiting.
+4. ✅ `worker/pipeline.py`: resolve → geolocate new IPs → ensure region MOER → a single
+   transaction upsert. Negative results (NXDOMAIN, no addresses) are stored with backoff
+   (`domains.retry_after`). Decisions in architecture ADR-9.
+5. ✅ CLI: `cadns measure <domain>` (`make measure d=<domain>`) for one-off runs. Unit tests
+   use recorded DNS responses and API fixtures, with no network (`make test-services`).
 
 **Exit:** `cadns measure www.youtube.com` populates the DB, and a `dig` through BIND
 now returns the greenest endpoint.
+🟨 2026-09-15: without API credentials, a real run stores the 16 addresses from all 5
+resolvers and BIND answers `www.youtube.com` with `aa` (random among unknown MOER).
+Pending: run with WattTime + IPinfo credentials.
 
 ---
 

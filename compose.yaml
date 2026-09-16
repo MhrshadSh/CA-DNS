@@ -74,6 +74,53 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # One-off service commands: make measure d=<domain>. The long-running worker
+  # arrives in Phase 4.
+  cli:
+    profiles: [tools]
+    build:
+      context: ./services
+      target: runtime
+    image: cadns-services:dev
+    restart: "no"
+    environment: &app-env
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-cadns}
+      PGUSER: cadns_app
+      PGPASSWORD: ${CADNS_APP_PASSWORD}
+      CADNS_IPINFO_TOKEN: ${CADNS_IPINFO_TOKEN:-}
+      CADNS_WATTTIME_USERNAME: ${CADNS_WATTTIME_USERNAME:-}
+      CADNS_WATTTIME_PASSWORD: ${CADNS_WATTTIME_PASSWORD:-}
+    volumes:
+      # Runtime data (gitignored): the IPinfo MMDB, if you have one (make ipinfo-db).
+      - ./data/ipinfo:/data/ipinfo:ro
+    networks:
+      - backend
+      - frontend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Unit + database tests for the Python services (make test). The backend
+  # network is internal, so these tests cannot reach the Internet.
+  services-tests:
+    profiles: [test]
+    build:
+      context: ./services
+      target: test
+    image: cadns-services-tests:dev
+    restart: "no"
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-cadns}
+      PGUSER: cadns_app
+      PGPASSWORD: ${CADNS_APP_PASSWORD}
+    networks:
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   # Integration tests (make test). Runs as the owner inside rolled-back
   # transactions, so the dev database is left untouched.
   tests:

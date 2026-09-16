@@ -30,7 +30,7 @@ the paper's author.
 ## Environment (dev VM)
 
 - Ubuntu 22.04.5 arm64 (`compute1`) under VMware Fusion; 2 CPUs, 3.8 GiB RAM,
-  17 GB root disk. Watch disk usage when building images.
+  76 GB root disk (LVM, grown 2026-09-16).
 - **sudo requires a password**: give the user the exact command to run
   instead of trying it.
 - Docker: Ubuntu's `docker.io` 29.x with `docker-compose-v2` and `docker-buildx`
@@ -54,7 +54,9 @@ make            # list targets
 make tools      # dev tools for your user (uv, pre-commit, clang-format, dig)
 make up         # build, run migrations, start stack (waits for healthchecks)
 make migrate | make seed   # apply migrations | load db/seed demo data
-make test       # integration tests in a container (make test a="-k ttl")
+make test       # all tests: test-services (unit + DB) and test-integration (pytest args: a="-k ttl")
+make measure d=www.youtube.com   # one-off measurement (cli service, needs API creds in .env)
+make ipinfo-db  # download IPinfo Core MMDB into data/ipinfo (enterprise DB access)
 make dig q="www.example.test AAAA"   # query the resolver (127.0.0.1:53 by default)
 make ps | make logs s=<service> | make psql
 make down       # stop, keep volumes
@@ -72,7 +74,11 @@ template `.env.example`).
 ## Conventions
 
 - **Python:** 3.12+, package `cadns` under `services/`, managed with `uv`; ruff
-  for lint/format (root `ruff.toml`); pytest.
+  for lint/format (root `ruff.toml`); pytest + pytest-asyncio. One image (`services/Dockerfile`,
+  targets `runtime` and `test`), entrypoint `cadns <command>`. DB settings via libpq `PG*`
+  env, app settings via `CADNS_*` (pydantic-settings). Unit tests never touch the network:
+  recorded DNS wire fixtures and `httpx.MockTransport`; DB tests are rolled-back transactions
+  as `cadns_app`. Generate `services/uv.lock` inside the pinned Python image.
 - **C (DLZ module):** `resolver/dlz_pgsql/`, clang-format (`resolver/dlz_pgsql/.clang-format`);
   the vendored `dlz_minimal.h` (ISC dlz-modules commit `068c1e5`) stays byte-identical.
   Keep BIND-independent logic in `src/util.c` with unit tests in `tests/` (run by the image build).

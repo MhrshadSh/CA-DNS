@@ -30,8 +30,13 @@ make env                           # create .env with a generated DB password
 make up                            # build, migrate and start the stack
 make seed                          # load demo data (*.example.test)
 make dig q=www.example.test        # query the resolver on 127.0.0.1:53
-make test                          # integration tests against the stack
+make test                          # all tests (services + integration)
+make measure d=www.youtube.com     # measure a domain now (needs API credentials in .env)
 make psql                          # database shell
 ```
 
 Run `make` to see all targets.
+
+Measurements need a [WattTime](https://watttime.org) account (MOER) and an
+[IPinfo](https://ipinfo.io) token (geolocation); set them in `.env`. With IPinfo
+database access, `make ipinfo-db` downloads the Core MMDB, which is used before the API.

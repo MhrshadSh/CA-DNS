@@ -1,0 +1,31 @@
+[project]
+name = "cadns"
+version = "0.1.0"
+description = "CA-DNS services: measurement worker, collector and monitor"
+requires-python = ">=3.12"
+dependencies = [
+    "dnspython>=2.8.0",
+    "httpx>=0.28.1",
+    "maxminddb>=3.2.0",
+    "psycopg[binary]>=3.3.5",
+    "pydantic-settings>=2.15.0",
+]
+
+[project.scripts]
+cadns = "cadns.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.14,<0.13"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+addopts = ["-ra", "--strict-markers", "-p", "no:cacheprovider"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["db: needs the PostgreSQL database (rolled-back transactions)"]

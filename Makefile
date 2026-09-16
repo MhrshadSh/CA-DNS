@@ -55,6 +55,18 @@ seed: ## Load demo data (db/seed) into the database
 dig: ## Query the resolver (make dig q="www.example.test AAAA")
 	dig @$(or $(RESOLVER_LISTEN),127.0.0.1) $(q)
 
+.PHONY: measure
+measure: ## Measure one domain now and store the result (make measure d=www.youtube.com)
+	@mkdir -p data/ipinfo
+	$(COMPOSE) --profile tools run --rm --build cli measure $(d)
+
+.PHONY: ipinfo-db
+ipinfo-db: ## Download the IPinfo Core MMDB into data/ipinfo (needs database access on CADNS_IPINFO_TOKEN)
+	@mkdir -p data/ipinfo
+	@curl -fsSL -o data/ipinfo/ipinfo_core.mmdb.tmp "https://ipinfo.io/data/ipinfo_core.mmdb?token=$(CADNS_IPINFO_TOKEN)"
+	@mv data/ipinfo/ipinfo_core.mmdb.tmp data/ipinfo/ipinfo_core.mmdb
+	@ls -lh data/ipinfo/ipinfo_core.mmdb
+
 .PHONY: psql
 psql: ## Open a psql shell in the database
 	$(COMPOSE) exec postgres psql -U "$(POSTGRES_USER)" -d "$(POSTGRES_DB)"
@@ -67,7 +79,14 @@ nuke: ## Stop services AND delete all data volumes (asks for confirmation)
 ##@ Quality
 
 .PHONY: test
-test: ## Run integration tests against the stack (pytest args: make test a="-k ttl")
+test: test-services test-integration ## Run all tests
+
+.PHONY: test-services
+test-services: ## Python services unit + DB tests (pytest args: make test-services a="-k watttime")
+	$(COMPOSE) --profile test run --rm --build services-tests $(a)
+
+.PHONY: test-integration
+test-integration: ## Integration tests against the stack (pytest args: make test-integration a="-k ttl")
 	$(COMPOSE) --profile test run --rm --build tests $(a)
 
 .PHONY: lint

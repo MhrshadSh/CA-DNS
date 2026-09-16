@@ -107,6 +107,48 @@ has `aa`, so the collector must only consider A/AAAA. dnstap (fstrm) drops
 messages when its queue is full or the reader is gone, so the collector must
 tolerate loss: a lost miss is simply enqueued on the next one.
 
+### ADR-9: Measurement pipeline
+
+`cadns measure <domain>` (and, from Phase 4, the worker) runs
+`services/src/cadns/worker/pipeline.py`:
+
+1. **Resolve:** A and AAAA against every upstream resolver concurrently
+   (default 8.8.8.8, 1.1.1.1, 9.9.9.9, 45.90.28.243, 208.67.222.222; 2 s timeout,
+   TCP on truncation). CNAME chains in the response are followed; a record's TTL
+   is the minimum over the chain. One row per (type, address, resolver) is kept.
+2. **Classify:**
+   - `resolved` if any address came back, **but only if every type got at least
+     one definitive answer** (addresses, NODATA or NXDOMAIN). Otherwise the result
+     is `failed`, because storing A alone would serve AAAA as authoritative NODATA.
+   - `nxdomain` / `nodata`: served records are removed; `domains.retry_after` =
+     SOA negative TTL clamped to 5 min–1 h.
+   - `failed`: existing records are kept (they expire); retry after 60 s.
+3. **Geolocate** addresses not geolocated in the last 30 days: IPinfo MMDB
+   (`ipinfo_core.mmdb`, if present), then the IPinfo API (Bearer token, so
+   tokens never appear in URLs or logs). Non-global addresses are skipped.
+   Endpoints without coordinates are stored and rank as unknown MOER.
+4. **Region:** WattTime `region-from-loc` per location rounded to 0.01°
+   (~1 km), cached permanently in `cadns.location_regions` (IP geolocation
+   returns city centroids, so many IPs share one lookup). Locations outside
+   coverage are cached for 30 days. Anycast endpoints get no region (ADR-5).
+5. **MOER:** WattTime `/v3/forecast?horizon_hours=0`, the current value, per
+   region whose latest signal was fetched more than 5 min ago. Converted from
+   lbs CO2/MWh to g CO2/kWh. Regions the account cannot access (HTTP 403) stay
+   unknown.
+6. **Store:** region and signal caches are committed as they are fetched
+   (shared by all domains); the domain, its endpoints and its records are
+   written in one transaction, replacing the previous records.
+
+Client behaviour: WattTime tokens are renewed before their 30-minute expiry and
+on 401; requests are rate limited client-side (10/s by default, configurable)
+and HTTP 429 is retried with `Retry-After`. Unit tests use DNS responses
+recorded from 8.8.8.8 and API responses shaped after the published schemas;
+database tests run as `cadns_app` on the internal network (no Internet).
+
+Open: short upstream TTLs are stored as-is. CDN hostnames often have 20 s TTLs
+(e.g. `www.bing.com` → Akamai), so their green answers expire quickly unless
+the monitor (Phase 5) re-measures them or a minimum record TTL is introduced.
+
 ### ADR-8: Serve exact query names only
 
 A DLZ "zone" found for a parent makes BIND authoritative for everything below
@@ -207,13 +249,13 @@ and `now()` is fixed for the whole test, which makes TTL checks exact.
 
 ## 4. Data model
 
-Schema `cadns`, defined in `db/migrations/0001_init.sql` (the source of truth):
+Schema `cadns`, defined in `db/migrations/` (the source of truth):
 
 ```
 settings         (singleton PK, answer_k, max_answer_ttl, ns_name, hostmaster, updated_at)
 domains          (id PK, name UNIQUE, status, first_seen_at, measured_at,
                   last_queried_at, hit_count)
-                  status ∈ {pending, resolved, nxdomain, nodata, failed}
+                  status ∈ {pending, resolved, nxdomain, nodata, failed}, retry_after
 rrset_records    (domain_id FK, rtype {A, AAAA}, address FK→endpoints, resolver INET,
                   ttl, resolved_at, expires_at, PK(domain_id, rtype, address, resolver))
 endpoints        (address INET PK, lat, lon, city, country, asn, is_anycast,
@@ -223,7 +265,10 @@ carbon_signals   (region_code FK, point_time, moer_g_per_kwh, fetched_at,
                   PK(region_code, point_time))              -- latest point per region used
 measurement_queue(domain PK, reason {miss, expired}, state {pending, dead}, enqueued_at,
                   attempts, next_attempt_at, locked_by, locked_at, last_error)
+location_regions (provider, lat_e2, lon_e2, region_code FK NULL, looked_up_at)   -- 0003
 ```
+
+`domains.retry_after` (0003) holds the backoff for negative and failed measurements.
 
 Constraints keep the data canonical: domain names are lowercase without
 trailing dot; A records hold IPv4 host addresses and AAAA records IPv6 ones;
