@@ -126,6 +126,23 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Keeps active domains and carbon signals fresh; removes inactive data.
+  monitor:
+    build:
+      context: ./services
+      target: runtime
+    image: cadns-services:dev
+    command: ["monitor"]
+    restart: unless-stopped
+    stop_grace_period: 15s
+    environment: *app-env
+    networks:
+      - backend
+      - frontend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   # One-off service commands: make measure d=<domain>.
   cli:
     profiles: [tools]

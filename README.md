@@ -15,9 +15,10 @@ Built on BIND 9 + PostgreSQL (DLZ), inspired by
 - Architecture and design decisions: [docs/architecture.md](docs/architecture.md)
 - Build plan and status: [docs/ROADMAP.md](docs/ROADMAP.md)
 
-> Status: early development. Phases 0–4 are done: the resolver answers measured names
-> with the greenest endpoint, and misses are measured automatically (dnstap → queue →
-> worker). Phase 5 (IP monitor: keeping data fresh) is next.
+> Status: early development. Phases 0–5 are done: the resolver answers measured names
+> with the greenest endpoint, misses are measured automatically (dnstap → queue → worker),
+> and the monitor keeps active names and carbon signals fresh. Phase 6 (production
+> hardening) is next.
 
 ## Development setup
 

@@ -192,11 +192,17 @@ async def store_measurement(
         await cur.execute("DELETE FROM cadns.rrset_records WHERE domain_id = %s", (domain_id,))
         records = list(records)
         if records:
+            # Records stay servable at least min_record_ttl (ADR-10); ttl is kept as received.
+            await cur.execute("SELECT min_record_ttl FROM cadns.settings")
+            (min_ttl,) = await cur.fetchone()
             await cur.executemany(
                 """INSERT INTO cadns.rrset_records
                            (domain_id, rtype, address, resolver, ttl, resolved_at, expires_at)
                        VALUES (%s, %s, %s, %s, %s, now(), now() + make_interval(secs => %s))""",
-                [(domain_id, r.rtype, r.address, r.resolver, r.ttl, r.ttl) for r in records],
+                [
+                    (domain_id, r.rtype, r.address, r.resolver, r.ttl, max(r.ttl, min_ttl))
+                    for r in records
+                ],
             )
 
 

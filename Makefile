@@ -89,8 +89,12 @@ test-services: ## Python services unit + DB tests (pytest args: make test-servic
 	$(COMPOSE) --profile test run --rm --build services-tests $(a)
 
 .PHONY: test-integration
-test-integration: ## Integration tests against the stack (pytest args: make test-integration a="-k ttl")
-	$(COMPOSE) --profile test run --rm --build tests $(a)
+test-integration: ## Integration tests against the stack, except slow ones (make test-integration a="-k ttl")
+	$(COMPOSE) --profile test run --rm --build tests $(or $(a),-m "not slow")
+
+.PHONY: test-slow
+test-slow: ## Slow end-to-end tests (minutes): active domains stay served
+	$(COMPOSE) --profile test run --rm --build tests -m slow -v $(a)
 
 .PHONY: lint
 lint: ## Run all pre-commit hooks on the whole repo

@@ -14,4 +14,7 @@ package = false
 
 [tool.pytest.ini_options]
 addopts = ["-ra", "--strict-markers", "-p", "no:cacheprovider"]
-markers = ["internet: needs the resolver to reach the Internet (recursion)"]
+markers = [
+    "internet: needs the resolver to reach the Internet (recursion)",
+    "slow: takes minutes (run with make test-slow)",
+]

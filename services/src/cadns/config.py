@@ -59,6 +59,19 @@ class Settings(BaseSettings):
     queue_retry_max_seconds: int = Field(default=3600, ge=1)
     queue_dead_cooldown_seconds: int = Field(default=86400, ge=0)
 
+    # Monitor (Phase 5, ADR-10).
+    monitor_scan_seconds: float = Field(default=5.0, gt=0)
+    monitor_lead_seconds: int = Field(default=15, ge=0)
+    monitor_activity_window_seconds: int = Field(default=3600, ge=1)
+    monitor_min_remeasure_seconds: int = Field(default=10, ge=0)
+    monitor_carbon_check_seconds: float = Field(default=60.0, gt=0)
+    carbon_period_seconds: int = Field(default=300, ge=1)  # WattTime's data period
+    carbon_unavailable_backoff_seconds: int = Field(default=3600, ge=0)
+    monitor_gc_seconds: float = Field(default=3600.0, gt=0)
+    gc_domain_retention_days: int = Field(default=7, ge=1)
+    gc_endpoint_retention_days: int = Field(default=30, ge=1)
+    gc_carbon_history_days: int = Field(default=30, ge=0)  # 0 keeps all signals
+
     # Collector (Phase 4).
     dnstap_socket: Path = Path("/run/cadns/dnstap.sock")
     collector_flush_seconds: float = Field(default=1.0, gt=0)

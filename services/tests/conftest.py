@@ -67,3 +67,12 @@ async def committed() -> AsyncIterator[psycopg.AsyncConnection]:
             yield conn
         finally:
             await empty()
+
+
+@pytest.fixture
+async def tx() -> AsyncIterator[psycopg.AsyncConnection]:
+    """Connection to the test database inside a transaction that is rolled back."""
+    require_database()
+    conn = await psycopg.AsyncConnection.connect()
+    async with conn, conn.transaction(force_rollback=True):
+        yield conn

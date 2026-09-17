@@ -55,6 +55,7 @@ make tools      # dev tools for your user (uv, pre-commit, clang-format, dig)
 make up         # build, run migrations, start stack (waits for healthchecks)
 make migrate | make seed   # apply migrations | load db/seed demo data
 make test       # all tests: test-services (unit + DB) and test-integration (pytest args: a="-k ttl")
+make test-slow  # minutes-long e2e: an active domain stays served across TTLs (monitor)
 make measure d=www.youtube.com   # one-off measurement (cli service, needs API creds in .env)
 make ipinfo-db  # download IPinfo MMDB into data/ipinfo (IPINFO_DB=ipinfo_location|ipinfo_core)
 make dig q="www.example.test AAAA"   # query the resolver (127.0.0.1:53 by default)
@@ -68,7 +69,8 @@ template `.env.example`).
 
 ## Pending work
 
-1. Phase 5: IP monitor (expiry scan, carbon refresh, GC; decide on short CDN TTLs) — see ROADMAP.
+1. Decide `cadns.settings.min_record_ttl` (short CDN TTLs; cost table in ADR-10), then Phase 6:
+   production hardening — see ROADMAP.
 2. Open question: license (not chosen yet; the vendored `dlz_minimal.h` is ISC-licensed).
 
 ## Conventions

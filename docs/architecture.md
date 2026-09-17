@@ -174,13 +174,53 @@ database tests run as `cadns_app` on the internal network (no Internet).
 
 Short upstream TTLs are stored as-is: CDN hostnames often carry 20 s TTLs
 (e.g. `www.bing.com` → Akamai), so green answers expire quickly. Keeping them
-fresh is the monitor's job (Phase 5), not the worker's.
+fresh is the monitor's job, with an optional minimum record lifetime (ADR-10).
 
 Observed on the dev host (2026-09-16): the upstream resolvers answer from their
 PoP near this VM, so most candidates land in one grid region (the vantage-point
 risk in §5.2). Aggregating over resolvers still widens the set: for
 `www.bing.com`, 9.9.9.9 returned a different Akamai edge set than the other
 four resolvers.
+
+### ADR-10: IP monitor
+
+`cadns monitor` (`services/src/cadns/monitor/`) runs three jobs in one loop:
+
+| Job | Every | Does |
+|-----|-------|------|
+| expiry scan | 5 s | Enqueue (`reason = expired`) domains queried in the last hour whose served data expires within 15 s, unless `retry_after` is in the future or they were measured less than 10 s ago |
+| carbon refresh | 60 s | For regions of active, non-anycast endpoints that lack the current 5-minute point, fetch the current MOER; retried each minute until WattTime publishes it. Regions without data or access back off for 1 h |
+| GC | 1 h | Delete domains not queried for 7 days (never-queried ones by `first_seen_at`), dead jobs of deleted names, endpoints unreferenced and not geolocated for 30 days, and carbon points older than 30 days (each region's latest point is kept; `0` keeps all history) |
+
+- "Served until" is `min over types of max(expires_at)`, matching
+  `cadns.dlz_findzone` (ADR-5). Active domains that already expired (e.g. the
+  monitor was down) are re-measured as well.
+- With lead 15 s and scan 5 s, a record set with TTL T is re-measured about
+  every `T − 10` s, rounded up to the scan: 50 s for 60 s TTLs (observed live).
+- Every job takes `now` as a parameter and the scheduler takes an injectable
+  clock, so tests place data at fixed times and simulate hours of schedule.
+- One monitor instance is expected; a second one is harmless (enqueueing is
+  idempotent) but duplicates API calls.
+
+**Minimum record lifetime** (`cadns.settings.min_record_ttl`, migration 0004):
+the worker stores `expires_at = resolved_at + greatest(ttl, min_record_ttl)`,
+while `rrset_records.ttl` keeps the received TTL. Answer TTLs still follow
+ADR-5. Default `0` (upstream TTLs). Cost per active domain, from the policy
+above and TTLs observed 2026-09-17 (each measurement = 10 upstream queries):
+
+| Domain (paper) | Address TTL | min_record_ttl 0 | 60 | 300 |
+|----------------|-------------|------------------|----|-----|
+| www.youtube.com | 300 s | ≈12 measurements/h | ≈12/h | ≈12/h |
+| www.un.org | 60 s | ≈72/h | ≈72/h | ≈12/h |
+| www.bing.com | 20 s | ≈360/h | ≈72/h | ≈12/h |
+| www.tiktok.com | 20 s (4–6 s left at some resolvers) | ≈360/h | ≈72/h | ≈12/h |
+
+Trade-off: a floor cuts upstream load and API calls, but serves a CDN's
+address set longer than the CDN intended (a withdrawn edge stays in the
+candidate set up to `min_record_ttl`). Re-measuring also refreshes the
+candidate set, which churns for CDN names: `www.un.org` returned 38–43 of 131
+CloudFront addresses across four measurements in three minutes (14 new
+endpoints, each an IPinfo API lookup for the anycast flag).
 
 ### ADR-8: Serve exact query names only
 
@@ -367,6 +407,7 @@ Spike: a throwaway file-driven DLZ module on Debian trixie BIND 9.20.26
 | CNAME flattening | We answer A records directly at the qname | Intended; TTL is the minimum over the chain |
 | DNSSEC | Synthesised answers can't carry valid signatures (spike #11) | Serve only to non-validating stubs; never set AD; document |
 | DLZ calls block BIND threads | Each served-name probe runs a synchronous SQL call on a BIND worker thread | `statement_timeout_ms` (default 250), `connect_timeout` 2 s, reconnect backoff, pool sized to BIND's threads; measure in Phase 7 |
+| API usage from CDN churn | Short-TTL CDN names return new edge addresses on most measurements; each new endpoint costs an IPinfo API call (anycast flag) | `min_record_ttl` (ADR-10), `CADNS_ANYCAST_LOOKUP=false`, or an anycast prefix list (backlog) |
 | Probe-order dependency | ADR-8 relies on BIND's longest-first `findzonedb` order | Integration tests for parent/child sequences; re-run on BIND upgrades |
 | WattTime access tier | Free tier gives absolute MOER only for CAISO_NORTH; other regions only a relative index that can't be compared across regions | Research/paid account available. Still rate-limit, and cache per region |
 | IPinfo tier | WattTime needs lat/lon; IPinfo Lite has country/ASN only | Research/paid access available: city-level MMDB (primary), API (fallback) |

@@ -190,20 +190,27 @@ ranked unknown; `make measure d=www.un.org` reaches NL at 532 gCO2/kWh and
 
 ---
 
-## Phase 5: IP monitor ⬜
+## Phase 5: IP monitor ✅
 
 **Goal:** keep data fresh without waiting for client misses.
 
-1. Expiry scan: domains whose RRsets expire within Δ **and** were queried within
-   the activity window are enqueued with `reason = expired`.
-2. Carbon refresh: every 5 min, refresh MOER for regions that have active endpoints.
-3. GC: delete domains that have been inactive longer than the retention period.
-   Short upstream TTLs (CDN records of 20 s) make this the component that decides how
-   often active names are re-measured; evaluate a minimum record TTL here (ADR-9).
-4. Tests with a controllable clock.
+1. ✅ Expiry scan: domains whose RRsets expire within Δ (15 s) **and** were queried within
+   the activity window (1 h) are enqueued with `reason = expired` (every 5 s).
+2. ✅ Carbon refresh: regions with active endpoints get each new 5-min MOER point (checked
+   every minute, fetched only while the current point is missing).
+3. ✅ GC: delete domains that have been inactive longer than the retention period (7 days),
+   orphaned endpoints and old carbon history (30 days). Short upstream TTLs: configurable
+   `cadns.settings.min_record_ttl` (migration 0004, default 0) with a cost table in ADR-10.
+4. ✅ Tests with a controllable clock: jobs take `now`, the scheduler takes a fake clock
+   (hours simulated in milliseconds). `make test-slow` runs the live freshness test.
 
 **Exit:** a queried domain stays a hit indefinitely while it keeps being queried; carbon
 values track WattTime's 5-min updates.
+✅ Verified 2026-09-17: `www.un.org` (60 s TTL) queried every 2 s for 3 min got `aa` every
+time, re-measured by the monitor every 50 s; NL and CAISO_NORTH signals stored for four
+consecutive slots (10:40–10:55), each 16 s after the slot started. 123 services tests,
+57 integration tests and the slow e2e test pass.
+Open: choose `min_record_ttl` for the evaluation (ADR-10).
 
 ---
 

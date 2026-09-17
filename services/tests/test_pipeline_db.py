@@ -251,3 +251,18 @@ async def test_without_geolocation_or_carbon_endpoints_are_unlocated(conn, setti
            WHERE address IN ('198.18.0.5', '2001:db8:77::5') ORDER BY 1""",
     ) == [("198.18.0.5", None, None), ("2001:db8:77::5", None, None)]
     assert len(await store.dlz_answer(conn, DOMAIN)) == 4  # SOA, NS, A, AAAA
+
+
+async def test_min_record_ttl_extends_expiry_but_keeps_the_received_ttl(conn, settings):
+    await conn.execute("UPDATE cadns.settings SET min_record_ttl = 60")
+    pool = FakePool(answers(["198.18.0.1"], ["2001:db8:77::1"], ttl=20))
+
+    await Pipeline(conn, settings, pool).measure(DOMAIN)
+
+    assert await fetch(
+        conn,
+        """SELECT DISTINCT ttl, extract(epoch FROM expires_at - resolved_at)::int
+           FROM cadns.rrset_records r JOIN cadns.domains d ON d.id = r.domain_id
+           WHERE d.name = %s""",
+        DOMAIN,
+    ) == [(20, 60)]

@@ -21,6 +21,8 @@ from cadns.carbon import WattTimeClient
 from cadns.collector.service import Collector
 from cadns.config import Settings
 from cadns.geo import ApiSource, Geolocator, MmdbSource
+from cadns.monitor import tasks as monitor_tasks
+from cadns.monitor.service import Monitor, Schedule
 from cadns.resolvers import ResolverPool
 from cadns.worker import store
 from cadns.worker.pipeline import API_CONCURRENCY, Measurement, Pipeline
@@ -130,6 +132,75 @@ async def run_collector() -> int:
     return 0
 
 
+async def run_monitor() -> int:
+    settings = Settings()
+    stop = stop_on_signals()
+    freshness = monitor_tasks.FreshnessPolicy(
+        activity_window_seconds=settings.monitor_activity_window_seconds,
+        lead_seconds=settings.monitor_lead_seconds,
+        min_remeasure_seconds=settings.monitor_min_remeasure_seconds,
+    )
+    retention = monitor_tasks.RetentionPolicy(
+        domain_days=settings.gc_domain_retention_days,
+        endpoint_days=settings.gc_endpoint_retention_days,
+        carbon_history_days=settings.gc_carbon_history_days,
+    )
+    async with AsyncExitStack() as stack:
+        http = await stack.enter_async_context(httpx.AsyncClient(timeout=settings.http_timeout))
+        pool = psycopg_pool.AsyncConnectionPool(
+            "",
+            min_size=1,
+            max_size=2,
+            kwargs={"autocommit": True, "application_name": "cadns-monitor"},
+            open=False,
+        )
+        await pool.open(wait=False)
+        stack.push_async_callback(pool.close)
+        watttime = build_watttime(settings, http)
+
+        async def expiry_scan(now):
+            async with pool.connection() as conn:
+                queued = await monitor_tasks.scan_expiring(conn, now, freshness)
+            if queued:
+                log.info(
+                    "re-measuring %d expiring domain(s): %s", len(queued), ", ".join(queued[:5])
+                )
+
+        unavailable_until: dict[str, float] = {}
+
+        async def carbon_refresh(now):
+            loop_time = asyncio.get_running_loop().time()
+            skip = frozenset(r for r, until in unavailable_until.items() if until > loop_time)
+            async with pool.connection() as conn:
+                result = await monitor_tasks.refresh_carbon(
+                    conn,
+                    watttime,
+                    now,
+                    settings.monitor_activity_window_seconds,
+                    settings.carbon_period_seconds,
+                    skip,
+                )
+            for region in result.unavailable:
+                unavailable_until[region] = loop_time + settings.carbon_unavailable_backoff_seconds
+            for region, point_time in result.stored.items():
+                log.info("carbon signal %s at %s", region, point_time.isoformat())
+
+        async def garbage_collection(now):
+            async with pool.connection() as conn:
+                result = await monitor_tasks.collect_garbage(conn, now, retention)
+            if any(vars(result).values()):
+                log.info("garbage collected: %s", result)
+
+        schedules = [Schedule("expiry-scan", settings.monitor_scan_seconds, expiry_scan)]
+        if watttime is not None:
+            schedules.append(
+                Schedule("carbon-refresh", settings.monitor_carbon_check_seconds, carbon_refresh)
+            )
+        schedules.append(Schedule("gc", settings.monitor_gc_seconds, garbage_collection))
+        await Monitor(schedules).run(stop)
+    return 0
+
+
 async def print_report(conn, result: Measurement) -> None:
     out = sys.stdout.write
     out(f"\n{result.domain}: {result.outcome.status}")
@@ -170,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     measure_cmd.add_argument("domain")
     commands.add_parser("worker", help="consume the measurement queue")
     commands.add_parser("collector", help="read dnstap and enqueue misses")
+    commands.add_parser("monitor", help="keep active domains and carbon signals fresh")
     args = parser.parse_args(argv)
 
     cadns_log.setup(args.log_level)
@@ -179,6 +251,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(run_worker())
     if args.command == "collector":
         return asyncio.run(run_collector())
+    if args.command == "monitor":
+        return asyncio.run(run_monitor())
     return 2
 
 
