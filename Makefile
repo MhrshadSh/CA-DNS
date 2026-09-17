@@ -28,6 +28,7 @@ env: ## Create .env from .env.example with generated passwords
 
 .PHONY: up
 up: ## Build, apply migrations, and start all services
+	@mkdir -p data/ipinfo
 	$(COMPOSE) run --rm --build migrate
 	$(COMPOSE) up -d --build --wait $$($(COMPOSE) config --services | grep -vx migrate)
 

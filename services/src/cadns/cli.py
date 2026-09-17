@@ -1,21 +1,30 @@
-"""Command-line entry point: `cadns measure <domain>`."""
+"""Command-line entry point.
+
+cadns measure <domain>   measure one domain now and print a report
+cadns worker             consume the measurement queue (long-running)
+cadns collector          turn BIND's dnstap stream into queue entries (long-running)
+"""
 
 import argparse
 import asyncio
 import logging
+import signal
 import sys
 from contextlib import AsyncExitStack
 
 import httpx
+import psycopg_pool
 
 from cadns import db
 from cadns import log as cadns_log
 from cadns.carbon import WattTimeClient
+from cadns.collector.service import Collector
 from cadns.config import Settings
 from cadns.geo import ApiSource, Geolocator, MmdbSource
 from cadns.resolvers import ResolverPool
 from cadns.worker import store
-from cadns.worker.pipeline import Measurement, Pipeline
+from cadns.worker.pipeline import API_CONCURRENCY, Measurement, Pipeline
+from cadns.worker.service import Worker
 
 log = logging.getLogger("cadns")
 
@@ -63,6 +72,64 @@ async def measure(domain: str) -> int:
     return 0 if result.outcome.status != "failed" else 1
 
 
+def stop_on_signals() -> asyncio.Event:
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+    return stop
+
+
+async def run_worker() -> int:
+    settings = Settings()
+    stop = stop_on_signals()
+    async with AsyncExitStack() as stack:
+        http = await stack.enter_async_context(httpx.AsyncClient(timeout=settings.http_timeout))
+        pool = psycopg_pool.AsyncConnectionPool(
+            "",
+            min_size=1,
+            max_size=settings.worker_concurrency + 1,
+            kwargs={"autocommit": True, "application_name": "cadns-worker"},
+            open=False,
+        )
+        await pool.open(wait=False)
+        stack.push_async_callback(pool.close)
+
+        resolvers = ResolverPool(settings.resolvers, settings.resolver_timeout)
+        geolocator = build_geolocator(settings, http)
+        watttime = build_watttime(settings, http)
+        api_limit = asyncio.Semaphore(API_CONCURRENCY)
+
+        async def measure_domain(conn, domain):
+            pipeline = Pipeline(conn, settings, resolvers, geolocator, watttime, api_limit)
+            return await pipeline.measure(domain)
+
+        worker = Worker(
+            pool,
+            measure_domain,
+            settings.queue_policy,
+            concurrency=settings.worker_concurrency,
+            poll_seconds=settings.queue_poll_seconds,
+            grace_seconds=settings.worker_grace_seconds,
+            listen=lambda: db.connect(autocommit=True),
+        )
+        await worker.run(stop)
+    return 0
+
+
+async def run_collector() -> int:
+    settings = Settings()
+    collector = Collector(
+        settings.dnstap_socket,
+        settings.ignore_suffixes,
+        connect=lambda: db.connect(autocommit=True),
+        flush_seconds=settings.collector_flush_seconds,
+        max_batch=settings.collector_max_batch,
+    )
+    await collector.run(stop_on_signals())
+    return 0
+
+
 async def print_report(conn, result: Measurement) -> None:
     out = sys.stdout.write
     out(f"\n{result.domain}: {result.outcome.status}")
@@ -101,11 +168,17 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     measure_cmd = commands.add_parser("measure", help="measure one domain now")
     measure_cmd.add_argument("domain")
+    commands.add_parser("worker", help="consume the measurement queue")
+    commands.add_parser("collector", help="read dnstap and enqueue misses")
     args = parser.parse_args(argv)
 
     cadns_log.setup(args.log_level)
     if args.command == "measure":
         return asyncio.run(measure(args.domain))
+    if args.command == "worker":
+        return asyncio.run(run_worker())
+    if args.command == "collector":
+        return asyncio.run(run_collector())
     return 2
 
 

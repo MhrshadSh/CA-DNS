@@ -99,13 +99,15 @@ class Pipeline:
         pool: ResolverPool,
         geolocator: Geolocator | None = None,
         watttime: WattTimeClient | None = None,
+        api_limit: asyncio.Semaphore | None = None,
     ) -> None:
         self.conn = conn
         self.settings = settings
         self.pool = pool
         self.geolocator = geolocator
         self.watttime = watttime
-        self._api = asyncio.Semaphore(API_CONCURRENCY)
+        # Shared across concurrent pipelines in the worker to bound API calls.
+        self._api = api_limit or asyncio.Semaphore(API_CONCURRENCY)
 
     async def measure(self, domain: str) -> Measurement:
         name = normalize_domain(domain)

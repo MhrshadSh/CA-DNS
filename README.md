@@ -15,8 +15,9 @@ Built on BIND 9 + PostgreSQL (DLZ), inspired by
 - Architecture and design decisions: [docs/architecture.md](docs/architecture.md)
 - Build plan and status: [docs/ROADMAP.md](docs/ROADMAP.md)
 
-> Status: early development. Phases 0–2 (foundation, data model & answer policy, BIND
-> resolver + DLZ module) are done; Phase 3 (measurement worker) is next.
+> Status: early development. Phases 0–4 are done: the resolver answers measured names
+> with the greenest endpoint, and misses are measured automatically (dnstap → queue →
+> worker). Phase 5 (IP monitor: keeping data fresh) is next.
 
 ## Development setup
 

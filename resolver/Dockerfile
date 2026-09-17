@@ -22,7 +22,8 @@ RUN apt-get update -q \
  && apt-get install -yq --no-install-recommends \
         "bind9=${BIND9_VERSION}" "bind9-dnsutils=${BIND9_VERSION}" "libpq5=${LIBPQ_VERSION}" \
  && rm -rf /var/lib/apt/lists/* /etc/bind/rndc.key \
- && install -d -o bind -g bind -m 0750 /run/named /run/cadns
+ && install -d -o bind -g bind -m 0750 /run/named \
+ && install -d -o 10001 -g 10001 -m 0755 /run/cadns
 
 COPY --from=build /src/build/dlz_pgsql.so /usr/lib/cadns/dlz_pgsql.so
 COPY config/named.conf /etc/bind/named.conf

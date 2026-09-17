@@ -7,9 +7,13 @@ Database connection settings use libpq's standard PG* variables instead
 import ipaddress
 from functools import cached_property
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+if TYPE_CHECKING:
+    from cadns.queue import QueuePolicy
 
 DEFAULT_RESOLVERS = "8.8.8.8,1.1.1.1,9.9.9.9,45.90.28.243,208.67.222.222"
 
@@ -45,6 +49,28 @@ class Settings(BaseSettings):
 
     http_timeout: float = Field(default=10.0, gt=0)
 
+    # Worker and queue (Phase 4).
+    worker_concurrency: int = Field(default=4, ge=1, le=64)
+    worker_grace_seconds: float = Field(default=20.0, ge=0)
+    queue_poll_seconds: float = Field(default=10.0, gt=0)
+    queue_lock_timeout_seconds: int = Field(default=300, ge=1)
+    queue_max_attempts: int = Field(default=5, ge=1)
+    queue_retry_base_seconds: int = Field(default=30, ge=1)
+    queue_retry_max_seconds: int = Field(default=3600, ge=1)
+    queue_dead_cooldown_seconds: int = Field(default=86400, ge=0)
+
+    # Collector (Phase 4).
+    dnstap_socket: Path = Path("/run/cadns/dnstap.sock")
+    collector_flush_seconds: float = Field(default=1.0, gt=0)
+    collector_max_batch: int = Field(default=5000, ge=1)
+    # Never measured: single-label names and names under these suffixes
+    # (special-use names, RFC 6761 / RFC 6762 / RFC 9476, and the RFC 2606
+    # documentation domains).
+    collector_ignore_suffixes: str = (
+        "test,example,invalid,localhost,local,onion,alt,arpa,internal,lan,home,corp,"
+        "example.com,example.net,example.org"
+    )
+
     @field_validator("ipinfo_token", "watttime_password", mode="before")
     @classmethod
     def _empty_secret_is_none(cls, value: object) -> object:
@@ -68,3 +94,23 @@ class Settings(BaseSettings):
     @cached_property
     def resolvers(self) -> tuple[str, ...]:
         return tuple(self.upstream_resolvers.split(","))
+
+    @cached_property
+    def ignore_suffixes(self) -> frozenset[str]:
+        return frozenset(
+            part.strip().strip(".").lower()
+            for part in self.collector_ignore_suffixes.split(",")
+            if part.strip().strip(".")
+        )
+
+    @cached_property
+    def queue_policy(self) -> "QueuePolicy":
+        from cadns.queue import QueuePolicy
+
+        return QueuePolicy(
+            lock_timeout_seconds=self.queue_lock_timeout_seconds,
+            max_attempts=self.queue_max_attempts,
+            retry_base_seconds=self.queue_retry_base_seconds,
+            retry_max_seconds=self.queue_retry_max_seconds,
+            dead_cooldown_seconds=self.queue_dead_cooldown_seconds,
+        )

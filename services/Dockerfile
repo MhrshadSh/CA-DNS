@@ -16,8 +16,12 @@ WORKDIR /cadns/services
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 COPY src/ src/
+# Fixed uid/gid: /run/cadns (the dnstap socket volume) is owned by it in the
+# resolver image too, whichever container initialises the volume.
 RUN uv sync --locked --no-dev --no-editable \
- && useradd --system --no-create-home cadns
+ && groupadd --system --gid 10001 cadns \
+ && useradd --system --no-create-home --uid 10001 --gid 10001 cadns \
+ && install -d -o 10001 -g 10001 -m 0755 /run/cadns
 
 FROM base AS test
 RUN uv sync --locked --no-editable

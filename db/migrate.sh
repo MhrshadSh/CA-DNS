@@ -77,8 +77,24 @@ seed() {
     done
 }
 
+# Development/CI only: keep a separate database for the services' tests, so a
+# running worker never touches test data. Skipped when the variable is unset.
+migrate_test_database() {
+    [[ -n ${CADNS_TEST_DATABASE:-} ]] || return 0
+    [[ ${CADNS_TEST_DATABASE} =~ ^[a-z_][a-z0-9_]*$ ]] || die "bad CADNS_TEST_DATABASE name"
+    if [[ -z "$(psql_ -d postgres -At -c "SELECT 1 FROM pg_database WHERE datname = '${CADNS_TEST_DATABASE}'")" ]]; then
+        log "creating test database ${CADNS_TEST_DATABASE}"
+        psql_ -d postgres -c "CREATE DATABASE ${CADNS_TEST_DATABASE}"
+    fi
+    log "test database ${CADNS_TEST_DATABASE}:"
+    PGDATABASE="${CADNS_TEST_DATABASE}" migrate
+}
+
 case "${1:-migrate}" in
-migrate) migrate ;;
+migrate)
+    migrate
+    migrate_test_database
+    ;;
 seed) seed ;;
 *) die "usage: cadns-migrate [migrate|seed]" ;;
 esac

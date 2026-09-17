@@ -107,6 +107,28 @@ has `aa`, so the collector must only consider A/AAAA. dnstap (fstrm) drops
 messages when its queue is full or the reader is gone, so the collector must
 tolerate loss: a lost miss is simply enqueued on the next one.
 
+Implementation (Phase 4, `services/src/cadns/collector/`):
+- The collector listens on `/run/cadns/dnstap.sock` (volume shared with BIND;
+  both images own `/run/cadns` as uid 10001, the socket is mode 0666) and speaks
+  bi-directional Frame Streams (READY/ACCEPT, START, data, STOP/FINISH).
+- dnstap frames are decoded with a small protobuf reader for the handful of
+  fields needed instead of generated code (no protoc toolchain; the schema has
+  been stable since 2014). Tests use frames recorded from our BIND 9.20.
+- Only IN A/AAAA responses count. **hit** (`aa`): `last_queried_at`, `hit_count`.
+  **miss** (no `aa`, NOERROR/NXDOMAIN): the domain is upserted as `pending`
+  (so activity is known before the first measurement) and enqueued unless
+  `retry_after` is in the future or the domain was **measured after the miss**
+  (clients retrying while the worker ran would otherwise trigger duplicate
+  measurements; response times include `response_time_nsec`).
+- Never measured: single-label names and names under special-use suffixes
+  (`test`, `example`, `invalid`, `localhost`, `local`, `onion`, `alt`, `arpa`,
+  `internal`, `lan`, `home`, `corp`) and the RFC 2606 documentation domains
+  `example.com/net/org` (`CADNS_COLLECTOR_IGNORE_SUFFIXES`).
+- Events are aggregated per name and flushed every second; a failed flush is
+  dropped, like any other dnstap loss.
+- BIND reconnects to the socket lazily: after a collector restart the first
+  client response triggers the reconnect and is lost (observed 2026-09-16).
+
 ### ADR-9: Measurement pipeline
 
 `cadns measure <domain>` (and, from Phase 4, the worker) runs
@@ -200,6 +222,18 @@ and workers are woken with `LISTEN/NOTIFY`. It supports retries with
 backoff and a dead-letter state. There's no extra broker to run. Redis Streams
 can replace it later behind the same `Queue` interface if throughput requires.
 
+Semantics (Phase 4, `services/src/cadns/queue/`):
+- `claim` sets `locked_by`/`locked_at` and counts the attempt; locks older than
+  5 min (a crashed worker) can be claimed again.
+- A measurement that completes (resolved, nxdomain, nodata) deletes the row;
+  negative results back off through `domains.retry_after` (ADR-9).
+- A `failed` measurement or an exception retries after 30 s, doubling up to
+  1 h; after 5 attempts the row is dead-lettered. A dead row is revived by a new
+  miss once a 1-day cooldown has passed.
+- The worker (`cadns worker`) runs 4 measurements concurrently, sleeps until
+  NOTIFY or a 10 s poll, and on SIGTERM stops claiming, gives running
+  measurements 20 s, then cancels and releases them (no attempt counted).
+
 ### ADR-4: Normalised carbon data; MOER joined at answer time
 
 Endpoints map to a grid region, and MOER is stored **per region**, refreshed
@@ -258,6 +292,13 @@ project in `tests/` with pytest + psycopg. Each test works inside a transaction
 that is rolled back, so tests never disturb the dev database or each other,
 and `now()` is fixed for the whole test, which makes TTL checks exact.
 
+Since Phase 4 a live worker consumes the dev database's queue, so the Python
+services' tests (`services-tests`) use a separate database, `cadns_test`,
+created and migrated by the `migrate` service (`CADNS_TEST_DATABASE`). Tests
+that need committed data (queue, collector, worker) empty the queue and domains
+tables there, after checking they are connected to `cadns_test`. The
+integration tests keep using the dev database, because they go through BIND.
+
 ## 4. Data model
 
 Schema `cadns`, defined in `db/migrations/` (the source of truth):
@@ -312,6 +353,7 @@ Spike: a throwaway file-driven DLZ module on Debian trixie BIND 9.20.26
 | 10 | Mixed-case qname (0x20) | Names reach the module lowercase; answer keeps the client's case |
 | 11 | DNSSEC | Served answers never have `ad` or RRSIG, even with `+dnssec`; recursed answers are unaffected (`ad`) |
 | 12 | dnstap | Available in the Debian build; `aa` visible in `CLIENT_RESPONSE`; lossy (ADR-2) |
+| 14 | dnstap reconnect (Phase 4) | After the collector restarts, BIND reconnects on the next client response, which is lost; later responses arrive in order with nanosecond timestamps |
 | 13 | Container without IPv6 | named tries IPv6 root servers, which slows cold-cache priming enough to SERVFAIL the first queries → run `named -4` unless the network has IPv6 |
 
 ### 5.2 Risk register

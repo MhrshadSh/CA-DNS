@@ -68,7 +68,7 @@ template `.env.example`).
 
 ## Pending work
 
-1. Phase 4: queue & collector ("Aggregate") — see ROADMAP.
+1. Phase 5: IP monitor (expiry scan, carbon refresh, GC; decide on short CDN TTLs) — see ROADMAP.
 2. Open question: license (not chosen yet; the vendored `dlz_minimal.h` is ISC-licensed).
 
 ## Conventions
@@ -88,7 +88,10 @@ template `.env.example`).
   one (checksummed), add a new migration. The answer policy lives in SQL functions
   (`cadns.dlz_findzone`, `cadns.dlz_lookup`).
 - **Tests:** integration tests are a separate uv project in `tests/`, run in the `tests`
-  compose service (Postgres has no host port); each test is a rolled-back transaction.
+  compose service (Postgres has no host port) against the dev DB; each test is a rolled-back
+  transaction, except resolver/e2e tests that must commit (they clean up). Services tests use
+  the separate `cadns_test` database, because the live worker consumes the dev queue.
+  Test names under `.test` and `example.com` are never measured (collector ignore list).
   Generate `tests/uv.lock` inside the pinned Python image (host Python is 3.10).
 - **Shell:** `set -Eeuo pipefail`, idempotent, shellcheck-clean.
 - Pin image and tool versions. Verify current versions instead of assuming them.

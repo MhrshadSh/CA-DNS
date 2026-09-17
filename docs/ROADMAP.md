@@ -167,20 +167,26 @@ ranked unknown; `make measure d=www.un.org` reaches NL at 532 gCO2/kWh and
 
 ---
 
-## Phase 4: Queue & collector ("Aggregate") ⬜
+## Phase 4: Queue & collector ("Aggregate") ✅
 
 **Goal:** close the loop automatically: miss → measured → green answers.
 
-1. `queue/`: `enqueue(domain, reason)` (dedup), `claim(batch)` with `SKIP LOCKED`,
-   `complete`, `fail` (exponential backoff, dead letter after N attempts),
-   `LISTEN/NOTIFY` wake-up.
-2. Worker service: long-running consumer with a concurrency limit and graceful shutdown.
-3. `collector/`: dnstap Frame Streams reader on a unix socket; classify
-   `CLIENT_RESPONSE` (AA ⇒ hit ⇒ touch `last_queried_at`; non-AA A/AAAA ⇒ miss ⇒ enqueue).
-   Batch writes. Ignore names from internal/blocked lists.
-4. End-to-end test: first `dig` → no `aa`; wait; second `dig` → `aa`, greenest IP.
+1. ✅ `queue/`: `enqueue(domain, reason)` (dedup), `claim(batch)` with `SKIP LOCKED`,
+   `complete`, `fail` (exponential backoff, dead letter after N attempts, revived after a
+   cooldown), `release`, `LISTEN/NOTIFY` wake-up. Semantics in architecture ADR-3.
+2. ✅ Worker service (`cadns worker`): long-running consumer with a concurrency limit and
+   graceful shutdown (in-flight jobs finish or are released).
+3. ✅ `collector/` (`cadns collector`): dnstap Frame Streams reader on a unix socket shared
+   with BIND; classify `CLIENT_RESPONSE` (AA ⇒ hit ⇒ touch `last_queried_at`; non-AA A/AAAA
+   ⇒ miss ⇒ enqueue). Batch writes. Ignore special-use and documentation names. Details in
+   ADR-2.
+4. ✅ End-to-end test (`tests/e2e/`): first `dig` → no `aa`; wait; second `dig` → `aa`,
+   greenest IP. Services tests moved to a separate `cadns_test` database (ADR-7).
 
 **Exit:** that end-to-end test passes on a fresh `make up`.
+✅ Verified 2026-09-16 on a fresh throwaway project (empty database): 104 services tests and
+57 integration tests pass, including the loop test (`www.wikipedia.org` answered `aa` about
+4 s after the first miss, measured exactly once). Stable over repeated runs on the dev stack.
 
 ---
 
