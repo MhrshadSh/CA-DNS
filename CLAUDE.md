@@ -52,6 +52,7 @@ One-time host setup: `sudo scripts/dev/bootstrap-vm.sh`. Tools land in
 ```bash
 make            # list targets
 make tools      # dev tools for your user (uv, pre-commit, clang-format, dig)
+make secrets    # create ./secrets/* (passwords, API tokens); required before make up
 make up         # build, run migrations, start stack (waits for healthchecks)
 make migrate | make seed   # apply migrations | load db/seed demo data
 make test       # all tests: test-services (unit + DB) and test-integration (pytest args: a="-k ttl")
@@ -64,13 +65,14 @@ make down       # stop, keep volumes
 make lint       # pre-commit on all tracked files
 ```
 
-Compose project name is `cadns`; secrets/config come from `.env` (gitignored;
-template `.env.example`).
+Compose project name is `cadns`. Non-secret config is in `.env` (template `.env.example`);
+credentials are files in `./secrets` (Docker secrets, `make secrets`) — never put them in
+`.env` or `compose.yaml` (ADR-11). Services log JSON and expose Prometheus metrics on :9100.
 
 ## Pending work
 
-1. Decide `cadns.settings.min_record_ttl` (short CDN TTLs; cost table in ADR-10), then Phase 6:
-   production hardening — see ROADMAP.
+1. Decide `cadns.settings.min_record_ttl` (short CDN TTLs; cost table in ADR-10), then Phase 7:
+   evaluation & CI — see ROADMAP.
 2. Open question: license (not chosen yet; the vendored `dlz_minimal.h` is ISC-licensed).
 
 ## Conventions

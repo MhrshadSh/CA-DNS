@@ -21,6 +21,8 @@ from typing import Any, Protocol
 import httpx
 import maxminddb
 
+from cadns import metrics
+
 log = logging.getLogger(__name__)
 
 API_BASE = "https://api.ipinfo.io"
@@ -151,12 +153,16 @@ class ApiSource:
                 log.info("IPinfo /lookup not available for this plan; using ipinfo.io/<ip>/json")
             response = await self._get(address, legacy=True)
         if response.status_code == 404:
+            metrics.api_requests.labels(api="ipinfo", outcome="empty").inc()
             return None
         if response.status_code != 200:
+            metrics.api_requests.labels(api="ipinfo", outcome="error").inc()
             raise GeoLookupError(f"IPinfo API returned HTTP {response.status_code}")
         record = response.json()
         if record.get("bogon"):
+            metrics.api_requests.labels(api="ipinfo", outcome="empty").inc()
             return None
+        metrics.api_requests.labels(api="ipinfo", outcome="ok").inc()
         return location_from_record(record, "ipinfo_api")
 
     async def _get(self, address: str, legacy: bool) -> httpx.Response:
@@ -167,6 +173,7 @@ class ApiSource:
                 headers={"Authorization": f"Bearer {self._token}", "Accept": "application/json"},
             )
         except httpx.HTTPError as exc:
+            metrics.api_requests.labels(api="ipinfo", outcome="error").inc()
             raise GeoLookupError(f"IPinfo API request failed: {exc}") from exc
 
 

@@ -6,6 +6,7 @@ import psycopg
 import psycopg_pool
 import pytest
 from cadns import queue
+from cadns.health import Heartbeat
 from cadns.queue import QueuePolicy
 from cadns.worker.pipeline import Measurement, Outcome
 from cadns.worker.service import Worker
@@ -132,3 +133,18 @@ async def test_shutdown_releases_unfinished_jobs(committed, pool):
     await asyncio.wait_for(running, timeout=5)
 
     assert await queue_rows(committed) == [("slow.p4.test", "pending", 0, False, None)]
+
+
+async def test_worker_beats_its_heartbeat(committed, pool, tmp_path):
+    heartbeat = Heartbeat(tmp_path / "worker.alive")
+    worker = make_worker(pool, FakeMeasure(), poll_seconds=0.2, heartbeat=heartbeat)
+    stop = asyncio.Event()
+    running = asyncio.create_task(worker.run(stop))
+
+    await wait_until(lambda: _exists(heartbeat.path), timeout=3)
+    stop.set()
+    await running
+
+
+async def _exists(path):
+    return path.exists()

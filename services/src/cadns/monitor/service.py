@@ -18,6 +18,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from cadns.health import Heartbeat
+
 log = logging.getLogger(__name__)
 
 Job = Callable[[datetime], Awaitable[None]]
@@ -44,9 +46,15 @@ class Clock:
 
 
 class Monitor:
-    def __init__(self, schedules: list[Schedule], clock: Clock | None = None) -> None:
+    def __init__(
+        self,
+        schedules: list[Schedule],
+        clock: Clock | None = None,
+        heartbeat: Heartbeat | None = None,
+    ) -> None:
         self.schedules = schedules
         self.clock = clock or Clock()
+        self.heartbeat = heartbeat
         self.runs: dict[str, int] = {s.name: 0 for s in schedules}
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -55,6 +63,8 @@ class Monitor:
             ", ".join(f"{s.name} every {s.interval_seconds:g}s" for s in self.schedules),
         )
         while not stop.is_set():
+            if self.heartbeat is not None:
+                self.heartbeat.beat()
             now = self.clock.monotonic()
             for schedule in self.schedules:
                 if stop.is_set() or schedule.next_run > now:

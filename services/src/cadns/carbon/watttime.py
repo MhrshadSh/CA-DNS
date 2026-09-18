@@ -16,6 +16,8 @@ from datetime import datetime
 
 import httpx
 
+from cadns import metrics
+
 log = logging.getLogger(__name__)
 
 API_BASE = "https://api.watttime.org"
@@ -99,8 +101,10 @@ class WattTimeClient:
             {"latitude": lat, "longitude": lon, "signal_type": self.signal_type},
         )
         if response.status_code in (400, 404):
+            metrics.api_requests.labels(api="watttime", outcome="empty").inc()
             return None
         self._raise_for_status(response, "region-from-loc")
+        metrics.api_requests.labels(api="watttime", outcome="ok").inc()
         body = response.json()
         return Region(code=body["region"], name=body.get("region_full_name"))
 
@@ -111,12 +115,15 @@ class WattTimeClient:
             {"region": region, "signal_type": self.signal_type, "horizon_hours": 0},
         )
         if response.status_code == 403:
+            metrics.api_requests.labels(api="watttime", outcome="empty").inc()
             log.warning("no WattTime %s access for region %s", self.signal_type, region)
             return None
         self._raise_for_status(response, "forecast")
         body = response.json()
         if not body.get("data"):
+            metrics.api_requests.labels(api="watttime", outcome="empty").inc()
             return None
+        metrics.api_requests.labels(api="watttime", outcome="ok").inc()
         point = body["data"][0]
         return Signal(
             region=region,
@@ -168,6 +175,7 @@ class WattTimeClient:
     @staticmethod
     def _raise_for_status(response: httpx.Response, what: str) -> None:
         if response.status_code != 200:
+            metrics.api_requests.labels(api="watttime", outcome="error").inc()
             raise WattTimeError(f"{what}: HTTP {response.status_code}: {response.text[:200]}")
 
 

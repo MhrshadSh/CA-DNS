@@ -222,6 +222,53 @@ candidate set, which churns for CDN names: `www.un.org` returned 38–43 of 131
 CloudFront addresses across four measurements in three minutes (14 new
 endpoints, each an IPinfo API lookup for the anycast flag).
 
+### ADR-11: Running it in production
+
+**Secrets are files, not environment variables.** The five credentials
+(PostgreSQL superuser, `cadns_dlz`, `cadns_app`, WattTime password, IPinfo
+token) live in `./secrets/*` (gitignored, directory mode 0700), are declared as
+Docker secrets and mounted read-only at `/run/secrets`. Every image runs
+`scripts/secrets-entrypoint.sh` first: it expands each `NAME_FILE` variable
+into `NAME` and unsets the pointer, so the values appear only in the service
+process, never in `compose.yaml`, `.env`, the image or `docker inspect`. One
+mechanism covers psql, libpq inside the C module and the Python settings alike;
+a plain `NAME` still works for local development, and an empty `NAME_FILE`
+falls back to it. `make secrets` creates the files, taking existing values from
+`.env` so an already-initialised database keeps working. Compose can only set a
+secret's uid/gid/mode under Swarm, so the files stay readable inside the
+container and the directory carries the protection on the host.
+
+**Every service has a healthcheck.** PostgreSQL uses `pg_isready`, BIND answers
+a `. NS` query, and each Python service touches
+`<health_dir>/<component>.alive` every time round its main loop, which
+`cadns healthcheck <component>` compares against a maximum age. That catches a
+wedged loop, which "the process is running" would not. When the database is
+down the services stay *healthy* on purpose: they log, retry and recover, and
+restarting them would not bring the database back.
+
+**Resource limits** are set per service (`mem_limit`, `cpus`, `pids_limit`):
+PostgreSQL 1 GB/1.5 CPU, BIND 384 MB, the Python services 256-384 MB, against
+about 95 MB, 22 MB and 45 MB in steady state. BIND's cache defaults to 90% of
+the *host's* RAM, which ignores the container limit, so `named.conf` caps it at
+`max-cache-size 192m`.
+
+**Logs are JSON** (`{"time", "level", "logger", "message", "service", ...}`,
+plus anything passed as `extra=`), with `--log-format text` for humans;
+`cadns measure` uses text by default.
+
+**Metrics** are exposed on port 9100 inside each long-running container
+(`/metrics`, nothing published to the host). Counters are incremented where the
+work happens: `cadns_client_responses_total{kind}` (hit/miss, so the hit ratio
+is a ratio of two counters), `cadns_measurements_total{status}`,
+`cadns_queue_operations_total{operation}` and `cadns_api_requests_total{api,
+outcome}`. The monitor refreshes database-wide gauges every 15 s: domains by
+status, served domains, queue depth and the age of its oldest entry, endpoints
+located or not, `cadns_region_moer_g_per_kwh{region}`, and
+`cadns_expected_saving_g_per_kwh` - the mean gCO2/kWh the greenest choice
+avoids compared with picking at random from the same candidates (342.5 g/kWh
+across the RRsets with a real choice on 2026-09-18). Prometheus and Grafana are
+not part of the stack; scrape the services from the `backend` network.
+
 ### ADR-8: Serve exact query names only
 
 A DLZ "zone" found for a parent makes BIND authoritative for everything below
@@ -414,4 +461,5 @@ Spike: a throwaway file-driven DLZ module on Debian trixie BIND 9.20.26
 | Anycast endpoints | IP geolocation is unreliable for anycast | v1: flag via anycast census prefixes and rank as unknown; later: traceroute-based location as in the paper |
 | Upstream vantage point | Public anycast resolvers answer for *their* PoP near the container, not the client | Deploy close to clients; ECS support later |
 | Open resolver | Recursive + public port 53 | `allow-recursion` / `allow-query` ACLs by default |
+| Container hardening not done | Containers still run with the default capability set and writable root filesystems; images are not scanned | Deliberately deferred to the backlog (2026-09-18): the deployment is a single-tenant research VM |
 | DLZ functions owned by a superuser | The `SECURITY DEFINER` functions run as the migration owner, which is the image's superuser in dev | Phase 6: dedicated non-superuser owner role |

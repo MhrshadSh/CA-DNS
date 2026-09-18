@@ -13,9 +13,9 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     PATH=/opt/venv/bin:$PATH
 
 WORKDIR /cadns/services
-COPY pyproject.toml uv.lock ./
+COPY services/pyproject.toml services/uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
-COPY src/ src/
+COPY services/src/ src/
 # Fixed uid/gid: /run/cadns (the dnstap socket volume) is owned by it in the
 # resolver image too, whichever container initialises the volume.
 RUN uv sync --locked --no-dev --no-editable \
@@ -25,10 +25,12 @@ RUN uv sync --locked --no-dev --no-editable \
 
 FROM base AS test
 RUN uv sync --locked --no-editable
-COPY tests/ tests/
+COPY services/tests/ tests/
+COPY --chmod=0755 scripts/secrets-entrypoint.sh /usr/local/bin/cadns-entrypoint
 USER cadns
-ENTRYPOINT ["pytest"]
+ENTRYPOINT ["cadns-entrypoint", "pytest"]
 
 FROM base AS runtime
+COPY --chmod=0755 scripts/secrets-entrypoint.sh /usr/local/bin/cadns-entrypoint
 USER cadns
-ENTRYPOINT ["cadns"]
+ENTRYPOINT ["cadns-entrypoint", "cadns"]

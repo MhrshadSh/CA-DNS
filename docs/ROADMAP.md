@@ -214,16 +214,24 @@ Open: choose `min_record_ttl` for the evaluation (ADR-10).
 
 ---
 
-## Phase 6: Production hardening ⬜
+## Phase 6: Production hardening ✅
 
-1. Config via env (pydantic-settings), and secrets via Docker secrets, not env files.
-2. Healthchecks for every service; `restart: unless-stopped`; resource limits.
-3. Structured JSON logs; Prometheus metrics (hit ratio, queue depth/latency,
-   API calls & errors, estimated gCO2/kWh saved per answer); optional Grafana dashboard.
-4. Security: not an open resolver by default, least-privilege DB roles, non-root containers,
-   image scanning.
-5. Resilience: DB down ⇒ BIND keeps resolving recursively (fail open);
-   WattTime/IPinfo down ⇒ keep last-known values.
+1. ✅ Config via env (pydantic-settings); secrets are Docker secrets (`./secrets`, `make secrets`),
+   expanded from `*_FILE` by each image's entrypoint (ADR-11). `.env` holds no credentials.
+2. ✅ Healthchecks for every service (`cadns healthcheck` on a per-loop heartbeat for the Python
+   services); `restart: unless-stopped`; `mem_limit` / `cpus` / `pids_limit` per service, and
+   BIND's cache capped so it respects the container limit.
+3. ✅ Structured JSON logs (`--log-format text` for humans); Prometheus metrics on :9100 in each
+   service: hit/miss counters, measurement outcomes, queue operations, API calls and errors, and
+   database gauges including `cadns_expected_saving_g_per_kwh`. Grafana is left to the backlog.
+4. ⏭️ Security hardening (non-root containers, dropped capabilities, read-only filesystems, image
+   scanning) moved to the backlog on request (2026-09-18); the resolver is already closed to
+   outside clients and the database roles are least-privilege.
+5. ✅ Resilience verified 2026-09-18: with PostgreSQL stopped the resolver keeps answering
+   recursively and all services stay up, retry and recover; with WattTime rejecting credentials a
+   measurement still completes and endpoints keep their last-known MOER (NL 10, FR 60, BE 357).
+
+134 services tests and 57 integration tests pass on the hardened stack.
 
 ---
 
@@ -245,3 +253,6 @@ Open: choose `min_record_ttl` for the evaluation (ADR-10).
 - RTT guard (skip green endpoints that are much slower than baseline).
 - EDNS Client Subnet forwarding to upstreams.
 - Additional carbon providers (Electricity Maps) behind the `carbon/` interface.
+- Container hardening: non-root containers, `cap_drop: ALL`, read-only root filesystems,
+  `no-new-privileges`, and image scanning in CI (deferred from Phase 6).
+- Grafana dashboard over the Prometheus metrics.

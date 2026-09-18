@@ -49,6 +49,16 @@ class Settings(BaseSettings):
 
     http_timeout: float = Field(default=10.0, gt=0)
 
+    # Logging and metrics.
+    log_level: str = "INFO"
+    log_format: str = "json"  # json | text
+    # Prometheus endpoint inside each container (0 disables it).
+    metrics_port: int = Field(default=9100, ge=0, le=65535)
+    metrics_refresh_seconds: float = Field(default=15.0, gt=0)
+
+    # Liveness: services touch <health_dir>/<component>.alive every loop.
+    health_dir: Path = Path("/tmp/cadns")
+
     # Worker and queue (Phase 4).
     worker_concurrency: int = Field(default=4, ge=1, le=64)
     worker_grace_seconds: float = Field(default=20.0, ge=0)

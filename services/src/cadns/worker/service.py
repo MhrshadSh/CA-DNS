@@ -19,7 +19,8 @@ from collections.abc import Awaitable, Callable
 import psycopg
 import psycopg_pool
 
-from cadns import queue
+from cadns import metrics, queue
+from cadns.health import Heartbeat
 from cadns.queue import Job, QueuePolicy
 from cadns.worker.pipeline import Measurement
 
@@ -43,6 +44,7 @@ class Worker:
         poll_seconds: float = 10.0,
         grace_seconds: float = 20.0,
         listen: Callable[[], Awaitable[psycopg.AsyncConnection]] | None = None,
+        heartbeat: Heartbeat | None = None,
     ) -> None:
         self.pool = pool
         self.measure = measure
@@ -51,6 +53,7 @@ class Worker:
         self.poll_seconds = poll_seconds
         self.grace_seconds = grace_seconds
         self._listen_connect = listen
+        self.heartbeat = heartbeat
         self.id = worker_id()
         self._wake = asyncio.Event()
         self._running: dict[asyncio.Task, Job] = {}
@@ -65,6 +68,8 @@ class Worker:
         stopper = asyncio.create_task(self._wake_on(stop))
         try:
             while not stop.is_set():
+                if self.heartbeat is not None:
+                    self.heartbeat.beat()
                 self._wake.clear()
                 claimed = await self._claim()
                 if claimed and len(self._running) < self.concurrency:
@@ -106,15 +111,18 @@ class Worker:
         try:
             async with self.pool.connection() as conn:
                 result = await self.measure(conn, job.domain)
+                metrics.measurements.labels(status=result.outcome.status).inc()
                 if result.outcome.status == "failed":
                     state = await queue.fail(
                         conn, job, self.id, "no definitive answer for A or AAAA", self.policy
                     )
+                    metrics.queue_operations.labels(operation=state).inc()
                     log.warning(
                         "measuring %s failed (attempt %d, now %s)", job.domain, job.attempts, state
                     )
                 else:
                     await queue.complete(conn, job, self.id)
+                    metrics.queue_operations.labels(operation="completed").inc()
         except asyncio.CancelledError:
             await asyncio.shield(self._release(job))
             raise

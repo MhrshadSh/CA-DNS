@@ -17,6 +17,7 @@ RUN uv sync --locked --no-install-project --no-cache
 COPY db/seed/ /cadns/db/seed/
 COPY tests/ ./
 
+COPY --chmod=0755 scripts/secrets-entrypoint.sh /usr/local/bin/cadns-entrypoint
 RUN useradd --system --no-create-home tester
 USER tester
-ENTRYPOINT ["pytest"]
+ENTRYPOINT ["cadns-entrypoint", "pytest"]

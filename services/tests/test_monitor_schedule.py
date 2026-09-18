@@ -4,6 +4,7 @@ import asyncio
 import itertools
 from datetime import UTC, datetime, timedelta
 
+from cadns.health import Heartbeat
 from cadns.monitor.service import Clock, Monitor, Schedule
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -97,3 +98,15 @@ async def test_stop_ends_the_real_clock_sleep_immediately():
 
     stop.set()
     await asyncio.wait_for(task, timeout=1)
+
+
+async def test_monitor_beats_its_heartbeat_every_loop(tmp_path):
+    clock = FakeClock()
+    heartbeat = Heartbeat(tmp_path / "monitor.alive")
+    monitor = Monitor(
+        [Schedule("scan", 5, recorder(clock, [], "scan"))], clock, heartbeat=heartbeat
+    )
+
+    await run_for(monitor, clock, 30)
+
+    assert heartbeat.path.exists()

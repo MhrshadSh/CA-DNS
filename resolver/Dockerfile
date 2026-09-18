@@ -12,7 +12,7 @@ RUN apt-get update -q \
  && apt-get install -yq --no-install-recommends gcc libc6-dev make pkgconf "libpq-dev=${LIBPQ_VERSION}" \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY dlz_pgsql/ ./
+COPY resolver/dlz_pgsql/ ./
 RUN make test all
 
 FROM ${DEBIAN_IMAGE}
@@ -26,7 +26,8 @@ RUN apt-get update -q \
  && install -d -o 10001 -g 10001 -m 0755 /run/cadns
 
 COPY --from=build /src/build/dlz_pgsql.so /usr/lib/cadns/dlz_pgsql.so
-COPY config/named.conf /etc/bind/named.conf
+COPY resolver/config/named.conf /etc/bind/named.conf
+COPY --chmod=0755 scripts/secrets-entrypoint.sh /usr/local/bin/cadns-entrypoint
 
 EXPOSE 53/udp 53/tcp
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
@@ -34,5 +35,5 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
 
 # -4: the default Docker network has no IPv6; trying IPv6 root servers slows
 # cold-cache priming (docs/architecture.md §5.1 #13).
-ENTRYPOINT ["/usr/sbin/named", "-f", "-u", "bind", "-c", "/etc/bind/named.conf"]
+ENTRYPOINT ["cadns-entrypoint", "/usr/sbin/named", "-f", "-u", "bind", "-c", "/etc/bind/named.conf"]
 CMD ["-4"]

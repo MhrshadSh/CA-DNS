@@ -15,12 +15,13 @@ from contextlib import AsyncExitStack
 import httpx
 import psycopg_pool
 
-from cadns import db
+from cadns import db, metrics
 from cadns import log as cadns_log
 from cadns.carbon import WattTimeClient
 from cadns.collector.service import Collector
 from cadns.config import Settings
 from cadns.geo import ApiSource, Geolocator, MmdbSource
+from cadns.health import Heartbeat, age_seconds
 from cadns.monitor import tasks as monitor_tasks
 from cadns.monitor.service import Monitor, Schedule
 from cadns.resolvers import ResolverPool
@@ -84,6 +85,7 @@ def stop_on_signals() -> asyncio.Event:
 
 async def run_worker() -> int:
     settings = Settings()
+    metrics.serve(settings.metrics_port)
     stop = stop_on_signals()
     async with AsyncExitStack() as stack:
         http = await stack.enter_async_context(httpx.AsyncClient(timeout=settings.http_timeout))
@@ -114,6 +116,7 @@ async def run_worker() -> int:
             poll_seconds=settings.queue_poll_seconds,
             grace_seconds=settings.worker_grace_seconds,
             listen=lambda: db.connect(autocommit=True),
+            heartbeat=Heartbeat(settings.health_dir / "worker.alive"),
         )
         await worker.run(stop)
     return 0
@@ -121,12 +124,14 @@ async def run_worker() -> int:
 
 async def run_collector() -> int:
     settings = Settings()
+    metrics.serve(settings.metrics_port)
     collector = Collector(
         settings.dnstap_socket,
         settings.ignore_suffixes,
         connect=lambda: db.connect(autocommit=True),
         flush_seconds=settings.collector_flush_seconds,
         max_batch=settings.collector_max_batch,
+        heartbeat=Heartbeat(settings.health_dir / "collector.alive"),
     )
     await collector.run(stop_on_signals())
     return 0
@@ -134,6 +139,7 @@ async def run_collector() -> int:
 
 async def run_monitor() -> int:
     settings = Settings()
+    metrics.serve(settings.metrics_port)
     stop = stop_on_signals()
     freshness = monitor_tasks.FreshnessPolicy(
         activity_window_seconds=settings.monitor_activity_window_seconds,
@@ -191,13 +197,22 @@ async def run_monitor() -> int:
             if any(vars(result).values()):
                 log.info("garbage collected: %s", result)
 
-        schedules = [Schedule("expiry-scan", settings.monitor_scan_seconds, expiry_scan)]
+        async def refresh_metrics(now):
+            async with pool.connection() as conn:
+                await metrics.refresh_from_database(conn, now)
+
+        schedules = [
+            Schedule("expiry-scan", settings.monitor_scan_seconds, expiry_scan),
+            Schedule("metrics", settings.metrics_refresh_seconds, refresh_metrics),
+        ]
         if watttime is not None:
             schedules.append(
                 Schedule("carbon-refresh", settings.monitor_carbon_check_seconds, carbon_refresh)
             )
         schedules.append(Schedule("gc", settings.monitor_gc_seconds, garbage_collection))
-        await Monitor(schedules).run(stop)
+        await Monitor(schedules, heartbeat=Heartbeat(settings.health_dir / "monitor.alive")).run(
+            stop
+        )
     return 0
 
 
@@ -233,18 +248,39 @@ async def print_report(conn, result: Measurement) -> None:
         out(f"  {rtype:<4} {data} ttl={ttl}\n")
 
 
+def healthcheck(component: str, max_age: float) -> int:
+    """Exit 0 while the service is looping, 1 once its heartbeat goes stale."""
+    path = Settings().health_dir / f"{component}.alive"
+    age = age_seconds(path)
+    if age is None:
+        print(f"{component}: no heartbeat yet ({path})", file=sys.stderr)
+        return 1
+    if age > max_age:
+        print(f"{component}: last heartbeat {age:.0f}s ago, limit {max_age:.0f}s", file=sys.stderr)
+        return 1
+    print(f"{component}: alive, last heartbeat {age:.0f}s ago")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cadns", description="CA-DNS services")
-    parser.add_argument("--log-level", default="INFO")
+    parser.add_argument("--log-level", default=None)
+    parser.add_argument("--log-format", choices=["json", "text"], default=None)
     commands = parser.add_subparsers(dest="command", required=True)
     measure_cmd = commands.add_parser("measure", help="measure one domain now")
     measure_cmd.add_argument("domain")
     commands.add_parser("worker", help="consume the measurement queue")
     commands.add_parser("collector", help="read dnstap and enqueue misses")
     commands.add_parser("monitor", help="keep active domains and carbon signals fresh")
+    health_cmd = commands.add_parser("healthcheck", help="liveness probe (container healthcheck)")
+    health_cmd.add_argument("component", choices=["collector", "worker", "monitor"])
+    health_cmd.add_argument("--max-age", type=float, default=60.0, help="seconds (default 60)")
     args = parser.parse_args(argv)
 
-    cadns_log.setup(args.log_level)
+    settings = Settings()
+    # Humans run `measure`; the long-running services log JSON for collection.
+    fmt = args.log_format or ("text" if args.command == "measure" else settings.log_format)
+    cadns_log.setup(args.log_level or settings.log_level, fmt, service=args.command)
     if args.command == "measure":
         return asyncio.run(measure(args.domain))
     if args.command == "worker":
@@ -253,6 +289,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(run_collector())
     if args.command == "monitor":
         return asyncio.run(run_monitor())
+    if args.command == "healthcheck":
+        return healthcheck(args.component, args.max_age)
     return 2
 
 

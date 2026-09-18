@@ -15,10 +15,11 @@ Built on BIND 9 + PostgreSQL (DLZ), inspired by
 - Architecture and design decisions: [docs/architecture.md](docs/architecture.md)
 - Build plan and status: [docs/ROADMAP.md](docs/ROADMAP.md)
 
-> Status: early development. Phases 0–5 are done: the resolver answers measured names
+> Status: early development. Phases 0–6 are done: the resolver answers measured names
 > with the greenest endpoint, misses are measured automatically (dnstap → queue → worker),
-> and the monitor keeps active names and carbon signals fresh. Phase 6 (production
-> hardening) is next.
+> the monitor keeps active names and carbon signals fresh, and the stack runs with Docker
+> secrets, healthchecks, resource limits, JSON logs and Prometheus metrics. Phase 7
+> (evaluation & CI) is next.
 
 ## Development setup
 
@@ -28,7 +29,8 @@ the developer tools and the Docker Engine that runs the stack.
 ```bash
 sudo scripts/dev/bootstrap-vm.sh   # once: Docker Engine, log rotation, free port 53, host DNS
 make tools                         # uv, pre-commit (+ git hook), clang-format, dig
-make env                           # create .env with a generated DB password
+make env                           # create .env (non-secret settings)
+make secrets                       # create ./secrets/* (passwords, API tokens)
 make up                            # build, migrate and start the stack
 make seed                          # load demo data (*.example.test)
 make dig q=www.example.test        # query the resolver on 127.0.0.1:53
@@ -40,5 +42,6 @@ make psql                          # database shell
 Run `make` to see all targets.
 
 Measurements need a [WattTime](https://watttime.org) account (MOER) and an
-[IPinfo](https://ipinfo.io) token (geolocation); set them in `.env`. With IPinfo
-database access, `make ipinfo-db` downloads the Core MMDB, which is used before the API.
+[IPinfo](https://ipinfo.io) token (geolocation): put them in `secrets/watttime_password`
+and `secrets/ipinfo_token` (created empty by `make secrets`), and the WattTime username in
+`.env`. With IPinfo database access, `make ipinfo-db` downloads the MMDB, used before the API.

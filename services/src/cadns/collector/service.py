@@ -21,9 +21,10 @@ from pathlib import Path
 
 import psycopg
 
-from cadns import queue
+from cadns import metrics, queue
 from cadns.collector.dnstap import HIT, ProtobufError, classify, decode_client_response
 from cadns.collector.framestreams import FrameStreamsError, serve_connection
+from cadns.health import Heartbeat
 
 log = logging.getLogger(__name__)
 
@@ -99,12 +100,14 @@ class Collector:
         connect: Callable[[], "asyncio.Future[psycopg.AsyncConnection]"],
         flush_seconds: float = 1.0,
         max_batch: int = 5000,
+        heartbeat: Heartbeat | None = None,
     ) -> None:
         self.socket_path = socket_path
         self.ignore_suffixes = ignore_suffixes
         self._connect = connect
         self.flush_seconds = flush_seconds
         self.max_batch = max_batch
+        self.heartbeat = heartbeat
         self._batch = Batch()
         self._full = asyncio.Event()
         self._conn: psycopg.AsyncConnection | None = None
@@ -120,6 +123,7 @@ class Collector:
         event = classify(response, self.ignore_suffixes)
         if event is None:
             return
+        metrics.client_responses.labels(kind=event.kind).inc()
         self._batch.add(event.kind, event.name, event.time)
         if len(self._batch) >= self.max_batch:
             self._full.set()
@@ -150,6 +154,7 @@ class Collector:
             self._conn = None
             return
         if queued:
+            metrics.queue_operations.labels(operation="enqueued").inc(len(queued))
             log.info("queued %d domain(s): %s", len(queued), ", ".join(queued[:5]))
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -168,6 +173,8 @@ class Collector:
                 for waiter in waiters:
                     waiter.cancel()
                 await self.flush()
+                if self.heartbeat is not None:
+                    self.heartbeat.beat()
         finally:
             server.close()
             await self.flush()

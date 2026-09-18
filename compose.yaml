@@ -1,7 +1,11 @@
 # CA-DNS service stack.
 #
 # Configuration is baked into images (production-like) or passed through
-# environment variables from .env; data lives in named volumes.
+# environment variables from .env; data lives in named volumes. Passwords and
+# API tokens are Docker secrets: files under ./secrets (created by
+# `make secrets`, gitignored), mounted read-only at /run/secrets and read at
+# start-up by the images' entrypoint, so they never appear in this file, in the
+# environment of the compose project, or in `docker inspect`.
 
 name: cadns
 
@@ -12,7 +16,12 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-cadns}
       POSTGRES_USER: ${POSTGRES_USER:-cadns_owner}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (run `make env`)}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    mem_limit: 1g
+    cpus: 1.5
+    pids_limit: 200
     volumes:
       # PostgreSQL 18+ images keep data under /var/lib/postgresql/<major>/
       - pgdata:/var/lib/postgresql
@@ -29,7 +38,8 @@ services:
   # condition: service_completed_successfully.
   migrate:
     build:
-      context: ./db
+      context: .
+      dockerfile: db/Dockerfile
       args:
         POSTGRES_VERSION: ${POSTGRES_VERSION:-18.6}
     image: cadns-migrate:dev
@@ -42,11 +52,15 @@ services:
       PGHOST: postgres
       PGDATABASE: ${POSTGRES_DB:-cadns}
       PGUSER: ${POSTGRES_USER:-cadns_owner}
-      PGPASSWORD: ${POSTGRES_PASSWORD}
-      CADNS_DLZ_PASSWORD: ${CADNS_DLZ_PASSWORD:?set CADNS_DLZ_PASSWORD in .env (run `make env`)}
-      CADNS_APP_PASSWORD: ${CADNS_APP_PASSWORD:?set CADNS_APP_PASSWORD in .env (run `make env`)}
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+      CADNS_DLZ_PASSWORD_FILE: /run/secrets/cadns_dlz_password
+      CADNS_APP_PASSWORD_FILE: /run/secrets/cadns_app_password
       # Separate database for the services' tests (dev/CI only).
       CADNS_TEST_DATABASE: ${CADNS_TEST_DATABASE:-cadns_test}
+    secrets: &owner-secrets
+      - postgres_password
+      - cadns_dlz_password
+      - cadns_app_password
     networks:
       - backend
     depends_on:
@@ -57,7 +71,8 @@ services:
   # for everything else (docs/architecture.md).
   resolver:
     build:
-      context: ./resolver
+      context: .
+      dockerfile: resolver/Dockerfile
     image: cadns-resolver:dev
     restart: unless-stopped
     environment:
@@ -65,7 +80,12 @@ services:
       PGHOST: postgres
       PGDATABASE: ${POSTGRES_DB:-cadns}
       PGUSER: cadns_dlz
-      PGPASSWORD: ${CADNS_DLZ_PASSWORD}
+      PGPASSWORD_FILE: /run/secrets/cadns_dlz_password
+    secrets:
+      - cadns_dlz_password
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 200
     ports:
       - "${RESOLVER_LISTEN:-127.0.0.1}:53:53/udp"
       - "${RESOLVER_LISTEN:-127.0.0.1}:53:53/tcp"
@@ -80,9 +100,12 @@ services:
         condition: service_completed_successfully
 
   # Reads BIND's dnstap stream: hits update activity, misses are queued.
+  # Prometheus metrics are on :9100 inside each service container (scrape them
+  # from the backend network; nothing is published to the host).
   collector:
     build:
-      context: ./services
+      context: .
+      dockerfile: services/Dockerfile
       target: runtime
     image: cadns-services:dev
     command: ["collector"]
@@ -91,7 +114,18 @@ services:
       PGHOST: postgres
       PGDATABASE: ${POSTGRES_DB:-cadns}
       PGUSER: cadns_app
-      PGPASSWORD: ${CADNS_APP_PASSWORD}
+      PGPASSWORD_FILE: /run/secrets/cadns_app_password
+    secrets:
+      - cadns_app_password
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD", "cadns", "healthcheck", "collector", "--max-age", "30"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     volumes:
       - dnstap:/run/cadns
     networks:
@@ -103,7 +137,8 @@ services:
   # Consumes the measurement queue: resolve, geolocate, attach MOER, store.
   worker:
     build:
-      context: ./services
+      context: .
+      dockerfile: services/Dockerfile
       target: runtime
     image: cadns-services:dev
     command: ["worker"]
@@ -113,11 +148,25 @@ services:
       PGHOST: postgres
       PGDATABASE: ${POSTGRES_DB:-cadns}
       PGUSER: cadns_app
-      PGPASSWORD: ${CADNS_APP_PASSWORD}
-      CADNS_IPINFO_TOKEN: ${CADNS_IPINFO_TOKEN:-}
+      PGPASSWORD_FILE: /run/secrets/cadns_app_password
       CADNS_WATTTIME_USERNAME: ${CADNS_WATTTIME_USERNAME:-}
-      CADNS_WATTTIME_PASSWORD: ${CADNS_WATTTIME_PASSWORD:-}
+      CADNS_WATTTIME_PASSWORD_FILE: /run/secrets/watttime_password
+      CADNS_IPINFO_TOKEN_FILE: /run/secrets/ipinfo_token
+    secrets: &app-secrets
+      - cadns_app_password
+      - watttime_password
+      - ipinfo_token
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD", "cadns", "healthcheck", "worker", "--max-age", "60"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     volumes:
+      # The IPinfo MMDB, if you have one (make ipinfo-db).
       - ./data/ipinfo:/data/ipinfo:ro
     networks:
       - backend
@@ -129,13 +178,24 @@ services:
   # Keeps active domains and carbon signals fresh; removes inactive data.
   monitor:
     build:
-      context: ./services
+      context: .
+      dockerfile: services/Dockerfile
       target: runtime
     image: cadns-services:dev
     command: ["monitor"]
     restart: unless-stopped
     stop_grace_period: 15s
     environment: *app-env
+    secrets: *app-secrets
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD", "cadns", "healthcheck", "monitor", "--max-age", "60"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     networks:
       - backend
       - frontend
@@ -147,11 +207,16 @@ services:
   cli:
     profiles: [tools]
     build:
-      context: ./services
+      context: .
+      dockerfile: services/Dockerfile
       target: runtime
     image: cadns-services:dev
     restart: "no"
     environment: *app-env
+    secrets: *app-secrets
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 100
     volumes:
       # Runtime data (gitignored): the IPinfo MMDB, if you have one (make ipinfo-db).
       - ./data/ipinfo:/data/ipinfo:ro
@@ -167,7 +232,8 @@ services:
   services-tests:
     profiles: [test]
     build:
-      context: ./services
+      context: .
+      dockerfile: services/Dockerfile
       target: test
     image: cadns-services-tests:dev
     restart: "no"
@@ -175,7 +241,9 @@ services:
       PGHOST: postgres
       PGDATABASE: ${CADNS_TEST_DATABASE:-cadns_test}
       PGUSER: cadns_app
-      PGPASSWORD: ${CADNS_APP_PASSWORD}
+      PGPASSWORD_FILE: /run/secrets/cadns_app_password
+    secrets:
+      - cadns_app_password
     networks:
       - backend
     depends_on:
@@ -192,6 +260,7 @@ services:
     image: cadns-tests:dev
     restart: "no"
     environment: *db-owner-env
+    secrets: *owner-secrets
     networks:
       - backend
     depends_on:
@@ -211,6 +280,19 @@ networks:
     internal: true
   # Internet access for recursion (resolver) and, later, upstream APIs (worker).
   frontend:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  cadns_dlz_password:
+    file: ./secrets/cadns_dlz_password
+  cadns_app_password:
+    file: ./secrets/cadns_app_password
+  # Empty files are fine: without credentials MOER and geolocation stay unknown.
+  watttime_password:
+    file: ./secrets/watttime_password
+  ipinfo_token:
+    file: ./secrets/ipinfo_token
 
 volumes:
   pgdata:
